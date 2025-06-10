@@ -9,6 +9,7 @@ from typing import List, Dict, Any
 import fitz  # PyMuPDF
 import numpy as np
 import chromadb
+from tqdm import tqdm
 from llm_wrapper import generate_embeddings, test_embedding_server, auto_start_server
 
 def setup_logging():
@@ -32,7 +33,7 @@ def extract_pdf_pages(pdf_path: str) -> List[Dict[str, Any]]:
         doc = fitz.open(pdf_path)
         logging.info(f"Processing PDF: {pdf_path} ({len(doc)} pages)")
         
-        for page_num in range(len(doc)):
+        for page_num in tqdm(range(len(doc)), desc="Extracting pages", unit="page"):
             page = doc[page_num]
             text = page.get_text()
             
@@ -43,9 +44,10 @@ def extract_pdf_pages(pdf_path: str) -> List[Dict[str, Any]]:
                     'text': text.strip(),
                     'source_file': pdf_path
                 })
-                logging.info(f"Extracted page {page_num + 1}: {len(text)} characters")
+                # Only log for verbose mode to avoid cluttering progress bar
+                logging.debug(f"Extracted page {page_num + 1}: {len(text)} characters")
             else:
-                logging.warning(f"Page {page_num + 1} is empty, skipping")
+                logging.debug(f"Page {page_num + 1} is empty, skipping")
         
         doc.close()
         
@@ -86,8 +88,23 @@ def generate_page_embeddings(pages: List[Dict[str, Any]], server_url: str = "htt
         # Extract text content
         texts = [page['text'] for page in pages]
         
-        # Generate embeddings using the new function
-        embeddings = generate_embeddings(texts, server_url)
+        # Generate embeddings with progress bar
+        with tqdm(total=len(texts), desc="Generating embeddings", unit="page") as pbar:
+            # Process in batches to show progress
+            batch_size = 1  # Process one page at a time for fine-grained progress
+            embeddings = []
+            
+            for i in range(0, len(texts), batch_size):
+                batch_texts = texts[i:i+batch_size]
+                batch_embeddings = generate_embeddings(batch_texts, server_url)
+                
+                # Handle single embedding vs list of embeddings
+                if len(batch_texts) == 1:
+                    embeddings.append(batch_embeddings)
+                else:
+                    embeddings.extend(batch_embeddings)
+                
+                pbar.update(len(batch_texts))
         
         # Add embeddings to page data
         for i, page in enumerate(pages):
@@ -145,13 +162,16 @@ def save_to_chroma(pages: List[Dict[str, Any]], pdf_path: str):
             })
             ids.append(page_id)
         
-        # Add all pages to collection in batch
-        collection.add(
-            documents=documents,
-            embeddings=embeddings,
-            metadatas=metadatas,
-            ids=ids
-        )
+        # Add all pages to collection in batch with progress
+        logging.info(f"Saving {len(pages)} pages to ChromaDB...")
+        with tqdm(total=1, desc="Saving to ChromaDB", unit="batch") as pbar:
+            collection.add(
+                documents=documents,
+                embeddings=embeddings,
+                metadatas=metadatas,
+                ids=ids
+            )
+            pbar.update(1)
         
         logging.info(f"Saved {len(pages)} pages to Chroma collection: {collection_name}")
         logging.info(f"Chroma database location: ./chroma_db")
