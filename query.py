@@ -6,9 +6,8 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Tuple
 import numpy as np
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
-from llm_wrapper import llm_call
+import chromadb
+from llm_wrapper import llm_call, generate_embeddings, test_embedding_server, auto_start_server
 
 def setup_logging():
     """Configure logging"""
@@ -17,92 +16,84 @@ def setup_logging():
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
 
-def load_embedding_model():
-    """Load the same embedding model used in ingestion"""
+def check_embedding_server(server_url: str = "http://127.0.0.1:8080"):
+    """Check if the Qwen3 embedding server is running, and auto-start if needed"""
+    logging.info("Checking Qwen3 embedding server...")
+    if not test_embedding_server(server_url):
+        logging.warning(f"Qwen3 embedding server is not responding at {server_url}")
+        logging.info("Attempting to start the server automatically...")
+        
+        if auto_start_server():
+            logging.info("Embedding server started successfully!")
+        else:
+            logging.error("Failed to auto-start embedding server")
+            logging.error("Please start the embedding server manually with:")
+            logging.error("./start_embedding_server.sh")
+            raise Exception("Embedding server not available")
+    else:
+        logging.info("Qwen3 embedding server is running successfully")
+    
+    return server_url
+
+def query_chroma_collection(pdf_name: str, query_embedding: np.ndarray, top_k: int = 10) -> List[Tuple[int, str, float]]:
+    """
+    Query Chroma collection for similar pages.
+    Returns list of (page_number, text_content, similarity_score)
+    """
     try:
-        model_name = "all-MiniLM-L6-v2"  # Use the fallback model that worked
-        logging.info(f"Loading embedding model: {model_name}")
-        model = SentenceTransformer(model_name)
-        logging.info("Embedding model loaded successfully")
-        return model
-    except Exception as e:
-        logging.error(f"Error loading embedding model: {e}")
-        raise
-
-def find_page_embeddings(pdf_name: str) -> List[Tuple[int, str, np.ndarray]]:
-    """
-    Find all page embeddings for a given PDF name.
-    Returns list of (page_number, text_file_path, embedding_array)
-    """
-    embeddings = []
-    
-    # Look for all embedding files matching the pattern
-    current_dir = Path('.')
-    embedding_files = list(current_dir.glob(f"{pdf_name}_page_*_embedding.npz"))
-    
-    if not embedding_files:
-        logging.error(f"No embedding files found for PDF: {pdf_name}")
-        return embeddings
-    
-    logging.info(f"Found {len(embedding_files)} embedding files")
-    
-    for embedding_file in embedding_files:
+        # Initialize Chroma client
+        client = chromadb.PersistentClient(path="./chroma_db")
+        
+        # Get collection for this PDF
+        collection_name = f"pdf_{pdf_name}"
+        
         try:
-            # Extract page number from filename
-            filename = embedding_file.stem  # Remove .npz extension
-            page_part = filename.split('_page_')[1].split('_embedding')[0]
-            page_number = int(page_part)
-            
-            # Load embedding
-            embedding_data = np.load(embedding_file)
-            embedding = embedding_data['embedding']
-            
-            # Find corresponding text file
-            text_file = f"{pdf_name}_page_{page_number}.txt"
-            
-            if Path(text_file).exists():
-                embeddings.append((page_number, text_file, embedding))
-            else:
-                logging.warning(f"Text file not found: {text_file}")
+            collection = client.get_collection(name=collection_name)
+        except Exception:
+            logging.error(f"Collection not found: {collection_name}")
+            logging.error("Make sure you've run ingest.py first for this PDF")
+            return []
+        
+        # Query the collection
+        results = collection.query(
+            query_embeddings=[query_embedding.tolist()],
+            n_results=top_k,
+            include=['documents', 'metadatas', 'distances']
+        )
+        
+        # Process results
+        similarities = []
+        
+        if results['documents'] and results['documents'][0]:
+            for i, (doc, metadata, distance) in enumerate(zip(
+                results['documents'][0],
+                results['metadatas'][0], 
+                results['distances'][0]
+            )):
+                # Convert distance to similarity (Chroma returns squared euclidean distance)
+                # For normalized embeddings, cosine similarity ≈ 1 - (euclidean_distance²/2)
+                similarity = max(0, 1 - (distance / 2))
                 
-        except Exception as e:
-            logging.error(f"Error processing {embedding_file}: {e}")
-            continue
-    
-    # Sort by page number
-    embeddings.sort(key=lambda x: x[0])
-    return embeddings
+                page_number = metadata['page_number']
+                similarities.append((page_number, doc, similarity))
+        
+        logging.info(f"Found {len(similarities)} results from Chroma")
+        return similarities
+        
+    except Exception as e:
+        logging.error(f"Error querying Chroma collection: {e}")
+        return []
 
-def generate_query_embedding(query: str, model: SentenceTransformer) -> np.ndarray:
-    """Generate embedding for the query text"""
+def generate_query_embedding(query: str, server_url: str = "http://127.0.0.1:8080") -> np.ndarray:
+    """Generate embedding for the query text using Qwen3 model"""
     try:
         logging.info(f"Generating embedding for query: '{query[:50]}...'")
-        embedding = model.encode([query], convert_to_numpy=True)
-        return embedding[0]  # Return single embedding array
+        embedding = generate_embeddings(query, server_url)
+        return embedding
     except Exception as e:
         logging.error(f"Error generating query embedding: {e}")
         raise
 
-def calculate_similarities(query_embedding: np.ndarray, 
-                         page_embeddings: List[Tuple[int, str, np.ndarray]]) -> List[Tuple[int, str, float]]:
-    """
-    Calculate cosine similarities between query and all page embeddings.
-    Returns list of (page_number, text_file, similarity_score) sorted by similarity.
-    """
-    similarities = []
-    
-    for page_number, text_file, page_embedding in page_embeddings:
-        try:
-            # Calculate cosine similarity
-            similarity = cosine_similarity([query_embedding], [page_embedding])[0][0]
-            similarities.append((page_number, text_file, similarity))
-        except Exception as e:
-            logging.error(f"Error calculating similarity for page {page_number}: {e}")
-            continue
-    
-    # Sort by similarity score (highest first)
-    similarities.sort(key=lambda x: x[2], reverse=True)
-    return similarities
 
 def detect_language(text: str) -> str:
     """Detect the language of the text using LLM"""
@@ -242,7 +233,7 @@ def display_results(similarities: List[Tuple[int, str, float]],
     print(header_bottom)
     
     count = 0
-    for page_number, text_file, similarity in similarities:
+    for page_number, text_content, similarity in similarities:
         if similarity >= min_similarity and count < top_k:
             # Page result border
             page_title = f"📄 Page {page_number} │ Similarity: {similarity:.4f} │ Rank {count + 1}"
@@ -254,9 +245,6 @@ def display_results(similarities: List[Tuple[int, str, float]],
             
             if show_text:
                 try:
-                    with open(text_file, 'r', encoding='utf-8') as f:
-                        text = f.read().strip()
-                    
                     # Content border
                     content_top, content_middle, content_bottom = create_page_border("📖 CONTENT", 80)
                     print(f"\n{content_top}")
@@ -264,7 +252,7 @@ def display_results(similarities: List[Tuple[int, str, float]],
                     print(content_bottom)
                     
                     # Use LLM to highlight relevant parts
-                    highlighted_text = highlight_relevant_text(query, text)
+                    highlighted_text = highlight_relevant_text(query, text_content)
                     clean_text, explanations = process_highlighted_text(highlighted_text)
                     
                     # Display the main content with highlights
@@ -281,7 +269,7 @@ def display_results(similarities: List[Tuple[int, str, float]],
                             print(f"\n\033[94m[{i}]\033[0m \033[36m{explanation}\033[0m")  # Blue footnote number + cyan explanation
                     
                 except Exception as e:
-                    print(f"Error reading text file: {e}")
+                    print(f"Error processing text content: {e}")
             
             count += 1
     
@@ -317,24 +305,20 @@ def main():
     setup_logging()
     
     try:
-        # Load embedding model
-        logging.info("Loading embedding model...")
-        model = load_embedding_model()
-        
-        # Find page embeddings
-        logging.info(f"Loading page embeddings for: {args.pdf_name}")
-        page_embeddings = find_page_embeddings(args.pdf_name)
-        
-        if not page_embeddings:
-            logging.error("No page embeddings found. Make sure you've run ingest.py first.")
-            sys.exit(1)
+        # Check embedding server
+        logging.info("Checking embedding server...")
+        server_url = check_embedding_server()
         
         # Generate query embedding
-        query_embedding = generate_query_embedding(args.query, model)
+        query_embedding = generate_query_embedding(args.query, server_url)
         
-        # Calculate similarities
-        logging.info("Calculating similarities...")
-        similarities = calculate_similarities(query_embedding, page_embeddings)
+        # Query Chroma collection
+        logging.info("Querying Chroma collection...")
+        similarities = query_chroma_collection(args.pdf_name, query_embedding, max(args.top_k, 20))
+        
+        if not similarities:
+            logging.error("No results found. Make sure you've run ingest.py first for this PDF.")
+            sys.exit(1)
         
         # Display results
         display_results(similarities, args.query, args.top_k, args.min_similarity, args.show_text)

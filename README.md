@@ -60,8 +60,8 @@ Process a PDF document to extract text and generate embeddings:
 - `-v, --verbose`: Enable verbose logging
 
 **Output**:
-- `{pdf_name}_page_{N}.txt`: Individual page text files
-- `{pdf_name}_page_{N}_embedding.npz`: Corresponding embedding files
+- Text and embeddings stored in ChromaDB collection: `pdf_{pdf_name}`
+- Database location: `./chroma_db/`
 
 ### 2. Querying Documents
 
@@ -103,25 +103,38 @@ python llm_wrapper.py
 
 1. **ingest.py**: Document processing pipeline
    - PDF text extraction using PyMuPDF
-   - Embedding generation with sentence-transformers
-   - Efficient storage in compressed NumPy format
+   - Embedding generation via Qwen3 llama.cpp server
+   - Storage in ChromaDB vector database
 
 2. **query.py**: Semantic search engine
-   - Cosine similarity calculation
+   - ChromaDB similarity search
    - Multi-language content analysis
    - Visual result highlighting with explanations
 
 3. **llm_wrapper.py**: LLM integration layer
-   - OpenRouter API integration
-   - Error handling and retry logic
-   - Environment-based configuration
+   - OpenRouter API integration for text analysis
+   - Qwen3 embedding server communication
+   - Auto-start server functionality
+
+4. **check_server.py**: Server management utility
+   - Check embedding server status
+   - Auto-start server functionality
+
+5. **start_embedding_server.sh**: Embedding server launcher
+   - Starts Qwen3 model via llama.cpp
+   - Configures embedding-specific parameters
 
 ### Embedding Models
 
-**Primary**: Qwen/Qwen3-Embedding-0.6B-GGUF
-**Fallback**: all-MiniLM-L6-v2
+**Primary**: Qwen3-Embedding-0.6B-Q8_0 (via llama.cpp server)
+- High-quality multilingual embeddings
+- Runs via dedicated embedding server on port 8080
+- Auto-start functionality available
 
-The system automatically falls back to the lighter model if the primary model fails to load.
+**Storage**: ChromaDB vector database
+- Persistent storage in `./chroma_db/`
+- Efficient similarity search
+- Metadata preservation
 
 ### LLM Models
 
@@ -156,31 +169,38 @@ Automatic language detection with native explanations:
 
 ```
 llmrag/
-├── ingest.py              # PDF processing and embedding generation
-├── query.py               # Semantic search and result display
-├── llm_wrapper.py         # LLM API integration
-├── pyproject.toml         # Project dependencies and metadata
-├── .gitignore            # Git ignore patterns
-└── README.md             # This file
+├── ingest.py                    # PDF processing and embedding generation
+├── query.py                     # Semantic search and result display
+├── llm_wrapper.py              # LLM API integration and embedding server communication
+├── check_server.py             # Embedding server status checker
+├── start_embedding_server.sh   # Embedding server launcher script
+├── pyproject.toml              # Project dependencies and metadata
+├── llama.cpp/                  # llama.cpp submodule for embedding server
+│   ├── models/                 # Embedding model files
+│   └── build/                  # Compiled binaries
+├── .gitignore                  # Git ignore patterns
+└── README.md                   # This file
 
 # Generated files (ignored by git):
-├── .env                  # Environment configuration
-├── document_page_N.txt   # Extracted page text
-└── document_page_N_embedding.npz  # Page embeddings
+├── .env                        # Environment configuration
+└── chroma_db/                  # ChromaDB vector database storage
+    ├── chroma.sqlite3          # Database file
+    └── {collection_dirs}/      # Collection data
 ```
 
 ## Dependencies
 
 ### Core Libraries
 - `pymupdf` (1.23.28+): PDF text extraction
-- `sentence-transformers` (2.2.2+): Embedding generation
-- `torch` (2.1.0+): Deep learning backend
+- `chromadb` (0.4.22+): Vector database for embeddings
 - `numpy` (1.24.0+): Numerical computations
-- `requests` (2.32.3+): HTTP requests for LLM API
+- `requests` (2.32.3+): HTTP requests for LLM API and embedding server
 - `python-dotenv` (1.1.0+): Environment management
+- `scikit-learn` (1.3.0+): Additional ML utilities
 
-### Optional Dependencies
-- `scikit-learn`: Cosine similarity calculations (auto-installed)
+### External Dependencies
+- `llama.cpp`: Embedding server (included as submodule)
+- `qwen3-embedding-0.6b-q8_0.gguf`: Embedding model file
 
 ## Configuration
 
@@ -230,9 +250,9 @@ The system supports various embedding models through sentence-transformers:
    Solution: Check internet connection, system will auto-fallback
    ```
 
-3. **No Embeddings Found**:
+3. **Collection Not Found**:
    ```
-   Error: No embedding files found
+   Error: Collection not found: pdf_document_name
    Solution: Run ingest.py first to process documents
    ```
 
@@ -262,8 +282,9 @@ export PAK_DEBUG=true
 ### Testing
 
 ```bash
-# Test LLM connection
+# Test connections
 python llm_wrapper.py
+python check_server.py
 
 # Process sample document
 ./ingest.py sample.pdf -v
@@ -271,6 +292,37 @@ python llm_wrapper.py
 # Test search functionality  
 ./query.py sample "test query" -t -v
 ```
+
+### Setup Requirements
+
+Before using the system, you need:
+
+1. **Build llama.cpp**:
+   ```bash
+   cd llama.cpp
+   mkdir build
+   cd build
+   cmake .. -DGGML_CUDA=ON  # For CUDA support, or use cpu-only
+   make llama-server
+   ```
+
+2. **Download Qwen3 embedding model**:
+   ```bash
+   # Place the model file at:
+   # llama.cpp/models/qwen3-embedding-0.6b-q8_0.gguf
+   ```
+
+3. **Start embedding server** (manual or automatic):
+   ```bash
+   # Manual start
+   ./start_embedding_server.sh
+   
+   # Check status
+   python check_server.py
+   
+   # Auto-start
+   python check_server.py --start
+   ```
 
 ## License
 

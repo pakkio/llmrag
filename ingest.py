@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import List, Dict, Any
 import fitz  # PyMuPDF
 import numpy as np
-from sentence_transformers import SentenceTransformer
+import chromadb
+from llm_wrapper import generate_embeddings, test_embedding_server, auto_start_server
 
 def setup_logging():
     """Configure logging"""
@@ -54,44 +55,46 @@ def extract_pdf_pages(pdf_path: str) -> List[Dict[str, Any]]:
     
     return pages
 
-def load_embedding_model():
+def check_embedding_server(server_url: str = "http://127.0.0.1:8080"):
     """
-    Load the Qwen3-Embedding-0.6B-GGUF model using sentence-transformers.
+    Check if the Qwen3 embedding server is running, and auto-start if needed.
     """
-    try:
-        # Use the Hugging Face model identifier
-        model_name = "Qwen/Qwen3-Embedding-0.6B-GGUF"
-        logging.info(f"Loading embedding model: {model_name}")
+    logging.info("Checking Qwen3 embedding server...")
+    if not test_embedding_server(server_url):
+        logging.warning(f"Qwen3 embedding server is not responding at {server_url}")
+        logging.info("Attempting to start the server automatically...")
         
-        model = SentenceTransformer(model_name)
-        logging.info("Embedding model loaded successfully")
-        return model
-        
-    except Exception as e:
-        logging.error(f"Error loading embedding model: {e}")
-        # Fallback to a smaller model if the specified one fails
-        logging.info("Falling back to all-MiniLM-L6-v2 model")
-        return SentenceTransformer('all-MiniLM-L6-v2')
+        if auto_start_server():
+            logging.info("Embedding server started successfully!")
+        else:
+            logging.error("Failed to auto-start embedding server")
+            logging.error("Please start the embedding server manually with:")
+            logging.error("./start_embedding_server.sh")
+            raise Exception("Embedding server not available")
+    else:
+        logging.info("Qwen3 embedding server is running successfully")
+    
+    return server_url
 
-def generate_embeddings(pages: List[Dict[str, Any]], model: SentenceTransformer) -> List[Dict[str, Any]]:
+def generate_page_embeddings(pages: List[Dict[str, Any]], server_url: str = "http://127.0.0.1:8080") -> List[Dict[str, Any]]:
     """
-    Generate embeddings for each page using the specified model.
+    Generate embeddings for each page using the Qwen3 model via llama.cpp server.
     """
-    logging.info(f"Generating embeddings for {len(pages)} pages")
-    
-    # Extract text content for batch processing
-    texts = [page['text'] for page in pages]
+    logging.info(f"Generating embeddings for {len(pages)} pages using Qwen3 model")
     
     try:
-        # Generate embeddings in batch for efficiency
-        embeddings = model.encode(texts, convert_to_numpy=True)
+        # Extract text content
+        texts = [page['text'] for page in pages]
+        
+        # Generate embeddings using the new function
+        embeddings = generate_embeddings(texts, server_url)
         
         # Add embeddings to page data
         for i, page in enumerate(pages):
             page['embedding'] = embeddings[i].tolist()  # Convert numpy array to list for JSON serialization
             page['embedding_dim'] = len(embeddings[i])
             
-        logging.info(f"Generated embeddings with dimension: {embeddings.shape[1]}")
+        logging.info(f"Generated embeddings with dimension: {len(embeddings[0])}")
         
     except Exception as e:
         logging.error(f"Error generating embeddings: {e}")
@@ -99,33 +102,62 @@ def generate_embeddings(pages: List[Dict[str, Any]], model: SentenceTransformer)
     
     return pages
 
-def save_results(pages: List[Dict[str, Any]], pdf_path: str):
+def save_to_chroma(pages: List[Dict[str, Any]], pdf_path: str):
     """
-    Save each page as individual text file and embedding file.
-    Format: x_page_#.txt and x_page_#_embedding.npz
+    Save pages and embeddings to Chroma vector database.
     """
     try:
         pdf_name = Path(pdf_path).stem  # Get filename without extension
         
-        for page in pages:
-            page_num = page['page_number']
-            
-            # Save text file
-            text_filename = f"{pdf_name}_page_{page_num}.txt"
-            with open(text_filename, 'w', encoding='utf-8') as f:
-                f.write(page['text'])
-            logging.info(f"Saved text: {text_filename}")
-            
-            # Save embedding as .npz file
-            embedding_filename = f"{pdf_name}_page_{page_num}_embedding.npz"
-            embedding_array = np.array(page['embedding'])
-            np.savez_compressed(embedding_filename, embedding=embedding_array)
-            logging.info(f"Saved embedding: {embedding_filename}")
+        # Initialize Chroma client (embedded mode)
+        client = chromadb.PersistentClient(path="./chroma_db")
         
-        logging.info(f"Saved {len(pages)} pages as individual files")
+        # Get or create collection for this PDF
+        collection_name = f"pdf_{pdf_name}"
+        
+        # Delete existing collection if it exists (for re-ingestion)
+        try:
+            client.delete_collection(name=collection_name)
+            logging.info(f"Deleted existing collection: {collection_name}")
+        except:
+            pass  # Collection doesn't exist, that's fine
+        
+        collection = client.create_collection(
+            name=collection_name,
+            metadata={"source": pdf_path, "total_pages": len(pages)}
+        )
+        
+        # Prepare data for batch insertion
+        documents = []
+        embeddings = []
+        metadatas = []
+        ids = []
+        
+        for page in pages:
+            page_id = f"page_{page['page_number']}"
+            
+            documents.append(page['text'])
+            embeddings.append(page['embedding'])
+            metadatas.append({
+                'page_number': page['page_number'],
+                'source_file': pdf_path,
+                'text_length': len(page['text'])
+            })
+            ids.append(page_id)
+        
+        # Add all pages to collection in batch
+        collection.add(
+            documents=documents,
+            embeddings=embeddings,
+            metadatas=metadatas,
+            ids=ids
+        )
+        
+        logging.info(f"Saved {len(pages)} pages to Chroma collection: {collection_name}")
+        logging.info(f"Chroma database location: ./chroma_db")
         
     except Exception as e:
-        logging.error(f"Error saving results: {e}")
+        logging.error(f"Error saving to Chroma: {e}")
         raise
 
 def main():
@@ -160,17 +192,17 @@ def main():
             logging.warning("No text content found in PDF")
             sys.exit(1)
         
-        # Load embedding model
-        logging.info("Loading embedding model...")
-        model = load_embedding_model()
+        # Check embedding server
+        logging.info("Checking embedding server...")
+        server_url = check_embedding_server()
         
         # Generate embeddings
         logging.info("Generating embeddings...")
-        pages_with_embeddings = generate_embeddings(pages, model)
+        pages_with_embeddings = generate_page_embeddings(pages, server_url)
         
-        # Save results
-        logging.info("Saving results...")
-        save_results(pages_with_embeddings, str(pdf_path))
+        # Save results to Chroma
+        logging.info("Saving to Chroma database...")
+        save_to_chroma(pages_with_embeddings, str(pdf_path))
         
         logging.info(f"Successfully processed {len(pages)} pages from {pdf_path}")
         
