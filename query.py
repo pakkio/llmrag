@@ -35,53 +35,80 @@ def check_embedding_server(server_url: str = "http://127.0.0.1:8080"):
     
     return server_url
 
-def query_chroma_collection(pdf_name: str, query_embedding: np.ndarray, top_k: int = 10) -> List[Tuple[int, str, float]]:
+def list_available_collections() -> List[str]:
+    """List all available PDF collections"""
+    try:
+        client = chromadb.PersistentClient(path="./chroma_db")
+        collections = client.list_collections()
+        pdf_collections = [col.name for col in collections if col.name.startswith('pdf_')]
+        return [name.replace('pdf_', '') for name in pdf_collections]
+    except Exception as e:
+        logging.error(f"Error listing collections: {e}")
+        return []
+
+def query_chroma_collections(query_embedding: np.ndarray, top_k: int = 10, pdf_name: str = None) -> List[Tuple[str, int, str, float]]:
     """
-    Query Chroma collection for similar pages.
-    Returns list of (page_number, text_content, similarity_score)
+    Query Chroma collections for similar pages.
+    If pdf_name is provided, search only that collection. Otherwise search all collections.
+    Returns list of (pdf_name, page_number, text_content, similarity_score)
     """
     try:
         # Initialize Chroma client
         client = chromadb.PersistentClient(path="./chroma_db")
         
-        # Get collection for this PDF
-        collection_name = f"pdf_{pdf_name}"
+        # Determine which collections to search
+        if pdf_name:
+            collection_names = [f"pdf_{pdf_name}"]
+        else:
+            # Search all PDF collections
+            collections = client.list_collections()
+            collection_names = [col.name for col in collections if col.name.startswith('pdf_')]
         
-        try:
-            collection = client.get_collection(name=collection_name)
-        except Exception:
-            logging.error(f"Collection not found: {collection_name}")
-            logging.error("Make sure you've run ingest.py first for this PDF")
+        if not collection_names:
+            logging.error("No PDF collections found. Make sure you've run ingest.py first.")
             return []
         
-        # Query the collection
-        results = collection.query(
-            query_embeddings=[query_embedding.tolist()],
-            n_results=top_k,
-            include=['documents', 'metadatas', 'distances']
-        )
+        all_similarities = []
         
-        # Process results
-        similarities = []
-        
-        if results['documents'] and results['documents'][0]:
-            for i, (doc, metadata, distance) in enumerate(zip(
-                results['documents'][0],
-                results['metadatas'][0], 
-                results['distances'][0]
-            )):
-                # Convert distance to similarity (Chroma returns squared euclidean distance)
-                # For normalized embeddings, cosine similarity ≈ 1 - (euclidean_distance²/2)
-                similarity = max(0, 1 - (distance / 2))
+        # Query each collection
+        for collection_name in collection_names:
+            try:
+                collection = client.get_collection(name=collection_name)
+                pdf_name_from_collection = collection_name.replace('pdf_', '')
                 
-                page_number = metadata['page_number']
-                similarities.append((page_number, doc, similarity))
+                # Query the collection
+                results = collection.query(
+                    query_embeddings=[query_embedding.tolist()],
+                    n_results=top_k,
+                    include=['documents', 'metadatas', 'distances']
+                )
+                
+                # Process results
+                if results['documents'] and results['documents'][0]:
+                    for i, (doc, metadata, distance) in enumerate(zip(
+                        results['documents'][0],
+                        results['metadatas'][0], 
+                        results['distances'][0]
+                    )):
+                        # Convert distance to similarity (Chroma returns squared euclidean distance)
+                        # For normalized embeddings, cosine similarity ≈ 1 - (euclidean_distance²/2)
+                        similarity = max(0, 1 - (distance / 2))
+                        
+                        page_number = metadata['page_number']
+                        all_similarities.append((pdf_name_from_collection, page_number, doc, similarity))
+                        
+            except Exception as e:
+                logging.warning(f"Error querying collection {collection_name}: {e}")
+                continue
         
-        logging.info(f"Found {len(similarities)} results from Chroma")
-        return similarities
+        # Sort all results by similarity (highest first)
+        all_similarities.sort(key=lambda x: x[3], reverse=True)
+        
+        logging.info(f"Found {len(all_similarities)} results from {len(collection_names)} collections")
+        return all_similarities
         
     except Exception as e:
-        logging.error(f"Error querying Chroma collection: {e}")
+        logging.error(f"Error querying Chroma collections: {e}")
         return []
 
 def generate_query_embedding(query: str, server_url: str = "http://127.0.0.1:8080") -> np.ndarray:
@@ -219,11 +246,11 @@ def process_highlighted_text(highlighted_text: str) -> Tuple[str, List[str]]:
     
     return clean_text.strip(), explanations
 
-def display_results(similarities: List[Tuple[int, str, float]], 
+def display_results(similarities: List[Tuple[str, int, str, float]], 
                    query: str,
-                   top_k: int = 5, 
+                   top_k: int = 3, 
                    min_similarity: float = 0.0,
-                   show_text: bool = False):
+                   show_text: bool = True):
     """Display the search results with improved formatting"""
     
     # Main header
@@ -233,10 +260,10 @@ def display_results(similarities: List[Tuple[int, str, float]],
     print(header_bottom)
     
     count = 0
-    for page_number, text_content, similarity in similarities:
+    for pdf_name, page_number, text_content, similarity in similarities:
         if similarity >= min_similarity and count < top_k:
             # Page result border
-            page_title = f"📄 Page {page_number} │ Similarity: {similarity:.4f} │ Rank {count + 1}"
+            page_title = f"📄 {pdf_name} - Page {page_number} │ Similarity: {similarity:.4f} │ Rank {count + 1}"
             page_top, page_middle, page_bottom = create_page_border(page_title, 80)
             
             print(f"\n{page_top}")
@@ -277,9 +304,11 @@ def display_results(similarities: List[Tuple[int, str, float]],
         print(f"No results found with similarity >= {min_similarity}")
     
     # Summary border
-    summary_info = f"📊 Total pages: {len(similarities)}"
+    summary_info = f"📊 Total results: {len(similarities)}"
     if similarities:
-        summary_info += f" │ Best: Page {similarities[0][0]} ({similarities[0][2]:.4f}) │ Worst: Page {similarities[-1][0]} ({similarities[-1][2]:.4f})"
+        best_result = similarities[0]
+        worst_result = similarities[-1]
+        summary_info += f" │ Best: {best_result[0]} Page {best_result[1]} ({best_result[3]:.4f}) │ Worst: {worst_result[0]} Page {worst_result[1]} ({worst_result[3]:.4f})"
     
     summary_top, summary_middle, summary_bottom = create_page_border(summary_info, 100)
     print(f"\n{summary_top}")
@@ -288,13 +317,15 @@ def display_results(similarities: List[Tuple[int, str, float]],
 
 def main():
     parser = argparse.ArgumentParser(description='Query PDF pages using semantic similarity')
-    parser.add_argument('pdf_name', help='Name of the PDF (without .pdf extension)')
-    parser.add_argument('query', help='Query text to search for')
-    parser.add_argument('-k', '--top-k', type=int, default=5, help='Number of top results to show (default: 5)')
+    parser.add_argument('query', nargs='?', help='Query text to search for')
+    parser.add_argument('--pdf', '-p', help='Name of specific PDF to search (optional, searches all by default)')
+    parser.add_argument('-k', '--top-k', type=int, default=3, help='Number of top results to show (default: 3)')
     parser.add_argument('-s', '--min-similarity', type=float, default=0.0, 
                        help='Minimum similarity threshold (default: 0.0)')
-    parser.add_argument('-t', '--show-text', action='store_true', 
-                       help='Show text content preview for results')
+    parser.add_argument('--no-text', action='store_true', 
+                       help='Hide text content (text shown by default)')
+    parser.add_argument('--list', action='store_true', 
+                       help='List available PDF collections and exit')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose logging')
     
     args = parser.parse_args()
@@ -304,6 +335,21 @@ def main():
     
     setup_logging()
     
+    # Handle --list option
+    if args.list:
+        collections = list_available_collections()
+        if collections:
+            print("📚 Available PDF collections:")
+            for pdf_name in collections:
+                print(f"  • {pdf_name}")
+        else:
+            print("No PDF collections found. Run ingest.py first to process documents.")
+        sys.exit(0)
+    
+    # Check if query is provided (required unless using --list)
+    if not args.query:
+        parser.error("Query text is required unless using --list")
+    
     try:
         # Check embedding server
         logging.info("Checking embedding server...")
@@ -312,16 +358,17 @@ def main():
         # Generate query embedding
         query_embedding = generate_query_embedding(args.query, server_url)
         
-        # Query Chroma collection
-        logging.info("Querying Chroma collection...")
-        similarities = query_chroma_collection(args.pdf_name, query_embedding, max(args.top_k, 20))
+        # Query Chroma collections
+        logging.info("Querying Chroma collections...")
+        similarities = query_chroma_collections(query_embedding, max(args.top_k, 20), args.pdf)
         
         if not similarities:
-            logging.error("No results found. Make sure you've run ingest.py first for this PDF.")
+            logging.error("No results found. Make sure you've run ingest.py first.")
             sys.exit(1)
         
-        # Display results
-        display_results(similarities, args.query, args.top_k, args.min_similarity, args.show_text)
+        # Display results (show text by default unless --no-text is specified)
+        show_text = not args.no_text
+        display_results(similarities, args.query, args.top_k, args.min_similarity, show_text)
         
     except Exception as e:
         logging.error(f"Query failed: {e}")
