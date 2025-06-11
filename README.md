@@ -93,7 +93,26 @@ Search processed documents using semantic queries:
 
 # Filter by similarity threshold
 ./query.py pricetomorrow "competitive advantage" -s 0.3 -t
+
+# Theological/conceptual queries (works well with religious texts)
+./query.py The_Bible_Book "What can we learn from David's relationship with God?"
 ```
+
+### Example: Semantic Search in Action
+
+The system excels at understanding complex, conceptual queries. Here's a real example:
+
+**Query**: "What can we learn from David's relationship with God?"
+
+**Results Retrieved**:
+1. **David vs Goliath** (similarity: 0.50) - Shows David's faith enabling impossible victories
+2. **David and Bathsheba** (similarity: 0.52) - Demonstrates even God's chosen can sin but character matters
+3. **Saul's Fall from Favor** (similarity: 0.54) - Illustrates God's favor, mercy, and absolute judgment
+
+**Generated Answer** (after LLM processing):
+> *David's relationship with God teaches us that God chooses based on character not appearances, that unwavering faith enables impossible victories, that even the chosen can fall but repentance matters, and that divine mercy and judgment work together. His story shows the importance of trusting God completely while remaining humble despite success.*
+
+The semantic search successfully connected a theological question to relevant biblical passages across different stories, enabling a comprehensive answer about spiritual lessons.
 
 ### 3. Testing LLM Connection
 

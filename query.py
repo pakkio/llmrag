@@ -35,13 +35,21 @@ def check_embedding_server(server_url: str = "http://127.0.0.1:8080"):
     
     return server_url
 
-def list_available_collections() -> List[str]:
-    """List all available PDF collections"""
+def list_available_collections() -> List[Tuple[str, int]]:
+    """List all available PDF collections with page counts"""
     try:
         client = chromadb.PersistentClient(path="./chroma_db")
         collections = client.list_collections()
-        pdf_collections = [col.name for col in collections if col.name.startswith('pdf_')]
-        return [name.replace('pdf_', '') for name in pdf_collections]
+        pdf_collections = []
+        
+        for col in collections:
+            if col.name.startswith('pdf_'):
+                collection = client.get_collection(name=col.name)
+                count = collection.count()
+                book_name = col.name.replace('pdf_', '')
+                pdf_collections.append((book_name, count))
+        
+        return pdf_collections
     except Exception as e:
         logging.error(f"Error listing collections: {e}")
         return []
@@ -339,9 +347,14 @@ def main():
     if args.list:
         collections = list_available_collections()
         if collections:
-            print("📚 Available PDF collections:")
-            for pdf_name in collections:
-                print(f"  • {pdf_name}")
+            print("📚 Available books in database:")
+            print("=" * 60)
+            total_pages = 0
+            for book_name, page_count in collections:
+                print(f"  📖 {book_name:<40} {page_count:>6} pages")
+                total_pages += page_count
+            print("=" * 60)
+            print(f"  📊 Total: {len(collections)} books, {total_pages} pages")
         else:
             print("No PDF collections found. Run ingest.py first to process documents.")
         sys.exit(0)
