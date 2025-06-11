@@ -102,39 +102,48 @@ python llm_wrapper.py
 ### Core Components
 
 1. **ingest.py**: Document processing pipeline
-   - PDF text extraction using PyMuPDF
-   - Embedding generation via Qwen3 llama.cpp server
-   - Storage in ChromaDB vector database
+   - PDF text extraction using PyMuPDF (fitz)
+   - Page-by-page text processing with progress tracking
+   - Embedding generation via llama.cpp server API calls
+   - Batch storage in ChromaDB with metadata (page numbers, document info)
 
 2. **query.py**: Semantic search engine
-   - ChromaDB similarity search
-   - Multi-language content analysis
-   - Visual result highlighting with explanations
+   - ChromaDB cosine similarity search across collections
+   - Multi-collection querying support
+   - Language-aware content analysis with LLM integration
+   - Visual result highlighting with color-coded explanations
 
-3. **llm_wrapper.py**: LLM integration layer
-   - OpenRouter API integration for text analysis
-   - Qwen3 embedding server communication
-   - Auto-start server functionality
+3. **llm_wrapper.py**: Unified API wrapper
+   - **LLM Integration**: OpenRouter API for semantic analysis and explanations
+   - **Embedding Integration**: llama.cpp server communication via REST API
+   - **Server Management**: Auto-start functionality with health checks
+   - **Error Handling**: Comprehensive timeout and retry logic
 
-4. **check_server.py**: Server management utility
-   - Check embedding server status
-   - Auto-start server functionality
+4. **check_server.py**: Embedding server utility
+   - Health check via embedding API test calls
+   - Background server startup with progress monitoring
+   - Port conflict detection and resolution guidance
 
-5. **start_embedding_server.sh**: Embedding server launcher
-   - Starts Qwen3 model via llama.cpp
-   - Configures embedding-specific parameters
+5. **start_embedding_server.sh**: Server launcher script
+   - Configures llama-server with embedding-specific parameters
+   - Validates binary and model file existence
+   - Sets optimal parameters: `--embedding --pooling last -ub 8192`
 
 ### Embedding Models
 
-**Primary**: Qwen3-Embedding-0.6B-Q8_0 (via llama.cpp server)
-- High-quality multilingual embeddings
-- Runs via dedicated embedding server on port 8080
-- Auto-start functionality available
+**Current Model**: Qwen3-Embedding-0.6B-Q8_0 (`qwen3-embedding-0.6b-q8_0.gguf`)
+- **Architecture**: Small but efficient multilingual embedding model
+- **Size**: ~600MB quantized to 8-bit (Q8_0)
+- **Context**: Supports up to 8192 tokens with unlimited batch size (`-ub 8192`)
+- **Pooling**: Last token pooling (`--pooling last`)
+- **Special Token**: Requires `<|endoftext|>` suffix for optimal performance
+- **Server**: Runs via llama.cpp server on port 8080
+- **Auto-start**: Available via `check_server.py --start`
 
 **Storage**: ChromaDB vector database
 - Persistent storage in `./chroma_db/`
-- Efficient similarity search
-- Metadata preservation
+- Efficient cosine similarity search
+- Metadata preservation with page numbers and document info
 
 ### LLM Models
 
@@ -192,15 +201,24 @@ llmrag/
 
 ### Core Libraries
 - `pymupdf` (1.23.28+): PDF text extraction
-- `chromadb` (0.4.22+): Vector database for embeddings
-- `numpy` (1.24.0+): Numerical computations
+- `chromadb` (0.4.22+): Vector database for embeddings  
+- `numpy` (1.24.0+): Numerical computations and embedding operations
 - `requests` (2.32.3+): HTTP requests for LLM API and embedding server
 - `python-dotenv` (1.1.0+): Environment management
-- `scikit-learn` (1.3.0+): Additional ML utilities
+- `scikit-learn` (1.3.0+): Additional ML utilities and similarity calculations
+- `tqdm` (4.66.0+): Progress bars for ingestion process
+- `sentence-transformers` (2.2.2+): Fallback embedding models (optional)
+- `torch` (2.1.0+): PyTorch backend for sentence-transformers
 
 ### External Dependencies
-- `llama.cpp`: Embedding server (included as submodule)
-- `qwen3-embedding-0.6b-q8_0.gguf`: Embedding model file
+- **llama.cpp**: Embedding server (included as git submodule)
+  - Provides `llama-server` binary for embedding generation
+  - Built from source with support for various hardware accelerations
+  - Located at `llama.cpp/build/bin/llama-server`
+- **qwen3-embedding-0.6b-q8_0.gguf**: Primary embedding model
+  - Pre-quantized 8-bit model (~600MB)
+  - Located at `llama.cpp/models/qwen3-embedding-0.6b-q8_0.gguf`
+  - Supports multilingual text embedding
 
 ## Configuration
 
@@ -214,12 +232,58 @@ llmrag/
 | `OPENROUTER_APP_TITLE` | Application title | `LLM_RAG_System` |
 | `PAK_DEBUG` | Enable debug logging | `false` |
 
-### Model Configuration
+### Embedding Model Configuration
 
-The system supports various embedding models through sentence-transformers:
-- Qwen models for multilingual support
-- BERT-based models for English
-- Specialized domain models
+The system uses llama.cpp server for embeddings. To change models:
+
+#### 1. Supported Model Types
+- **Text Embedding Models**: Any GGUF model that supports `--embedding` flag
+- **Popular Options**:
+  - `qwen3-embedding-0.6b-q8_0.gguf` (current, multilingual)
+  - `nomic-embed-text-v1.5.Q8_0.gguf` (English optimized)
+  - `bge-large-en-v1.5.Q8_0.gguf` (Large English model)
+  - `multilingual-e5-large.Q8_0.gguf` (Multilingual alternative)
+
+#### 2. How to Change Embedding Models
+
+**Step 1**: Download your desired GGUF embedding model
+```bash
+# Example: Download alternative model
+wget https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q8_0.gguf -P llama.cpp/models/
+```
+
+**Step 2**: Update the server startup script
+```bash
+# Edit start_embedding_server.sh
+MODEL_PATH="$LLAMA_DIR/models/your-new-model.gguf"
+```
+
+**Step 3**: Adjust server parameters if needed
+```bash
+# For different context lengths or pooling methods:
+exec ./bin/llama-server \
+    -m "$MODEL_PATH" \
+    --embedding \
+    --pooling mean \          # or 'last', 'cls' depending on model
+    -ub 4096 \               # adjust batch size for your model
+    --port 8080
+```
+
+**Step 4**: Update code if different special tokens are needed
+```python
+# In llm_wrapper.py, modify the generate_embeddings function:
+if not text.endswith('<|endoftext|>'):
+    text = text + '<|endoftext|>'  # Change this for different models
+```
+
+#### 3. Model-Specific Considerations
+
+| Model Family | Special Token | Pooling | Context Length | Notes |
+|--------------|---------------|---------|----------------|--------|
+| Qwen3 | `<|endoftext|>` | last | 8192 | Current default |
+| Nomic-Embed | None required | mean | 8192 | English optimized |
+| BGE | `[CLS]` | cls | 512 | BERT-based |
+| E5 | None required | mean/last | 4096 | Multilingual |
 
 ## Performance
 
@@ -244,22 +308,46 @@ The system supports various embedding models through sentence-transformers:
    Solution: Add API key to .env file
    ```
 
-2. **Model Loading Failed**:
+2. **Embedding Server Not Running**:
    ```
-   Error: Model download failed
-   Solution: Check internet connection, system will auto-fallback
+   Error: Connection refused to embedding server
+   Solution: Start server with ./start_embedding_server.sh or check_server.py --start
    ```
 
-3. **Collection Not Found**:
+3. **llama-server Binary Missing**:
+   ```
+   Error: llama-server binary not found
+   Solution: Build llama.cpp: cd llama.cpp/build && make llama-server
+   ```
+
+4. **Model File Missing**:
+   ```
+   Error: Model not found at llama.cpp/models/qwen3-embedding-0.6b-q8_0.gguf
+   Solution: Download model from HuggingFace or check file path
+   ```
+
+5. **Collection Not Found**:
    ```
    Error: Collection not found: pdf_document_name
    Solution: Run ingest.py first to process documents
    ```
 
-4. **Low Similarity Scores**:
+6. **Low Similarity Scores**:
    ```
    Issue: No relevant results
-   Solution: Try broader queries or lower similarity threshold
+   Solution: Try broader queries or lower similarity threshold (-s 0.1)
+   ```
+
+7. **Server Port Already in Use**:
+   ```
+   Error: Port 8080 already in use
+   Solution: Kill existing server: pkill -f llama-server, or change port in scripts
+   ```
+
+8. **CUDA/GPU Issues**:
+   ```
+   Error: CUDA initialization failed
+   Solution: Rebuild llama.cpp without CUDA: cmake .. && make llama-server
    ```
 
 ### Debug Mode
@@ -297,31 +385,60 @@ python check_server.py
 
 Before using the system, you need:
 
-1. **Build llama.cpp**:
+1. **Build llama.cpp server**:
    ```bash
    cd llama.cpp
-   mkdir build
-   cd build
-   cmake .. -DGGML_CUDA=ON  # For CUDA support, or use cpu-only
-   make llama-server
-   ```
-
-2. **Download Qwen3 embedding model**:
-   ```bash
-   # Place the model file at:
-   # llama.cpp/models/qwen3-embedding-0.6b-q8_0.gguf
-   ```
-
-3. **Start embedding server** (manual or automatic):
-   ```bash
-   # Manual start
-   ./start_embedding_server.sh
    
-   # Check status
+   # Create build directory
+   mkdir -p build
+   cd build
+   
+   # Configure build (choose one option):
+   # For CPU-only:
+   cmake ..
+   
+   # For CUDA support (if you have NVIDIA GPU):
+   cmake .. -DGGML_CUDA=ON
+   
+   # For Metal support (macOS):
+   cmake .. -DGGML_METAL=ON
+   
+   # Build the server
+   make llama-server
+   
+   # Verify build
+   ls -la bin/llama-server  # Should show the executable
+   ```
+
+2. **Download Qwen3 embedding model** (if not already present):
+   ```bash
+   cd llama.cpp/models
+   
+   # The model should already be present as qwen3-embedding-0.6b-q8_0.gguf
+   # If missing, download from HuggingFace:
+   wget https://huggingface.co/Qwen/Qwen3-0.6B-Embedding-GGUF/resolve/main/qwen3-embedding-0.6b-q8_0.gguf
+   ```
+
+3. **Verify server functionality**:
+   ```bash
+   # Check if server binary exists and model is present
    python check_server.py
    
-   # Auto-start
+   # Start server manually for testing
+   ./start_embedding_server.sh
+   
+   # Or auto-start server
    python check_server.py --start
+   ```
+
+4. **Test the complete setup**:
+   ```bash
+   # Test LLM connection
+   python llm_wrapper.py
+   
+   # Test with a sample document
+   ./ingest.py sample.pdf -v
+   ./query.py sample "test query" -t -v
    ```
 
 ## License
