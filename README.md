@@ -37,7 +37,13 @@ A powerful Retrieval-Augmented Generation (RAG) system that processes PDF docume
    ```
 
 3. **Environment Configuration**:
-   Create a `.env` file in the project root:
+   Copy the example environment file and configure it:
+   ```bash
+   cp .env.example .env
+   # Edit .env with your actual API key and preferences
+   ```
+   
+   Required configuration:
    ```env
    OPENROUTER_API_KEY=your_openrouter_api_key_here
    SEMANTIC_MODEL=anthropic/claude-3-haiku:beta
@@ -184,6 +190,7 @@ llmrag/
 ├── check_server.py             # Embedding server status checker
 ├── start_embedding_server.sh   # Embedding server launcher script
 ├── pyproject.toml              # Project dependencies and metadata
+├── .env.example                # Environment configuration template
 ├── llama.cpp/                  # llama.cpp submodule for embedding server
 │   ├── models/                 # Embedding model files
 │   └── build/                  # Compiled binaries
@@ -191,7 +198,7 @@ llmrag/
 └── README.md                   # This file
 
 # Generated files (ignored by git):
-├── .env                        # Environment configuration
+├── .env                        # Environment configuration (copy from .env.example)
 └── chroma_db/                  # ChromaDB vector database storage
     ├── chroma.sqlite3          # Database file
     └── {collection_dirs}/      # Collection data
