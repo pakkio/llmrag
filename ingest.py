@@ -122,6 +122,8 @@ def extract_pdf_pages(pdf_path: str, from_page: int = 1, to_page: int = 0) -> Li
             # Skip empty pages
             if text.strip():
                 text = text.strip()
+                # Ensure UTF-8 compatibility by encoding/decoding with error handling
+                text = text.encode('utf-8', errors='replace').decode('utf-8')
                 
                 # Check if page is too large and needs chunking
                 chunks = chunk_text(text, max_tokens=1500, overlap_tokens=150)

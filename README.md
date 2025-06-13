@@ -128,8 +128,9 @@ python llm_wrapper.py
 
 1. **ingest.py**: Document processing pipeline
    - PDF text extraction using PyMuPDF (fitz)
+   - Enhanced UTF-8 text processing with error handling
    - Page-by-page text processing with progress tracking
-   - Embedding generation via llama.cpp server API calls
+   - Embedding generation via direct llama-embedding binary execution
    - Batch storage in ChromaDB with metadata (page numbers, document info)
 
 2. **query.py**: Semantic search engine
@@ -140,35 +141,30 @@ python llm_wrapper.py
 
 3. **llm_wrapper.py**: Unified API wrapper
    - **LLM Integration**: OpenRouter API for semantic analysis and explanations
-   - **Embedding Integration**: llama.cpp server communication via REST API
-   - **Server Management**: Auto-start functionality with health checks
-   - **Error Handling**: Comprehensive timeout and retry logic
+   - **Embedding Integration**: Direct llama-embedding binary execution
+   - **Text Processing**: Advanced UTF-8 handling and text normalization
+   - **Error Handling**: Comprehensive timeout and retry logic with binary process management
 
-4. **check_server.py**: Embedding server utility
-   - Health check via embedding API test calls
-   - Background server startup with progress monitoring
-   - Port conflict detection and resolution guidance
-
-5. **start_embedding_server.sh**: Server launcher script
-   - Configures llama-server with embedding-specific parameters
-   - Validates binary and model file existence
-   - Sets optimal parameters: `--embedding --pooling last -ub 8192`
+4. **gradio_browser.py**: Web interface for document browsing
+   - Gradio-based web UI for interactive document search
+   - User-friendly interface for querying processed documents
 
 ### Embedding Models
 
 **Current Model**: Qwen3-Embedding-0.6B-Q8_0 (`qwen3-embedding-0.6b-q8_0.gguf`)
 - **Architecture**: Small but efficient multilingual embedding model
 - **Size**: ~600MB quantized to 8-bit (Q8_0)
-- **Context**: Supports up to 8192 tokens with unlimited batch size (`-ub 8192`)
-- **Pooling**: Last token pooling (`--pooling last`)
-- **Special Token**: Requires `<|endoftext|>` suffix for optimal performance
-- **Server**: Runs via llama.cpp server on port 8080
-- **Auto-start**: Available via `check_server.py --start`
+- **Context**: Supports up to 4096 tokens with batch size 1
+- **Pooling**: Mean pooling
+- **Execution**: Direct binary execution via llama-embedding
+- **Text Processing**: Advanced UTF-8 cleaning and normalization
+- **Performance**: 120-second timeout with comprehensive error handling
 
 **Storage**: ChromaDB vector database
 - Persistent storage in `./chroma_db/`
 - Efficient cosine similarity search
 - Metadata preservation with page numbers and document info
+- Auto-generated collection names: `pdf_{document_name}`
 
 ### LLM Models
 
@@ -205,14 +201,14 @@ Automatic language detection with native explanations:
 llmrag/
 ├── ingest.py                    # PDF processing and embedding generation
 ├── query.py                     # Semantic search and result display
-├── llm_wrapper.py              # LLM API integration and embedding server communication
-├── check_server.py             # Embedding server status checker
-├── start_embedding_server.sh   # Embedding server launcher script
+├── llm_wrapper.py              # LLM API integration and direct embedding binary execution
+├── gradio_browser.py           # Gradio web interface for document browsing
+├── info.py                     # Database information and utility functions
 ├── pyproject.toml              # Project dependencies and metadata
 ├── .env.example                # Environment configuration template
-├── llama.cpp/                  # llama.cpp submodule for embedding server
-│   ├── models/                 # Embedding model files
-│   └── build/                  # Compiled binaries
+├── llama.cpp/                  # llama.cpp repository for embedding generation
+│   ├── models/                 # Embedding model files (qwen3-embedding-0.6b-q8_0.gguf)
+│   └── build/bin/              # Compiled binaries (llama-embedding)
 ├── .gitignore                  # Git ignore patterns
 └── README.md                   # This file
 
@@ -220,7 +216,7 @@ llmrag/
 ├── .env                        # Environment configuration (copy from .env.example)
 └── chroma_db/                  # ChromaDB vector database storage
     ├── chroma.sqlite3          # Database file
-    └── {collection_dirs}/      # Collection data
+    └── {collection_dirs}/      # Collection data and embeddings
 ```
 
 ## Dependencies
@@ -237,10 +233,10 @@ llmrag/
 - `torch` (2.1.0+): PyTorch backend for sentence-transformers
 
 ### External Dependencies
-- **llama.cpp**: Embedding server (included as git submodule)
-  - Provides `llama-server` binary for embedding generation
+- **llama.cpp**: Embedding binary execution (included as git submodule)
+  - Provides `llama-embedding` binary for direct embedding generation
   - Built from source with support for various hardware accelerations
-  - Located at `llama.cpp/build/bin/llama-server`
+  - Located at `llama.cpp/build/bin/llama-embedding`
 - **qwen3-embedding-0.6b-q8_0.gguf**: Primary embedding model
   - Pre-quantized 8-bit model (~600MB)
   - Located at `llama.cpp/models/qwen3-embedding-0.6b-q8_0.gguf`
@@ -278,37 +274,32 @@ The system uses llama.cpp server for embeddings. To change models:
 wget https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q8_0.gguf -P llama.cpp/models/
 ```
 
-**Step 2**: Update the server startup script
-```bash
-# Edit start_embedding_server.sh
-MODEL_PATH="$LLAMA_DIR/models/your-new-model.gguf"
-```
-
-**Step 3**: Adjust server parameters if needed
-```bash
-# For different context lengths or pooling methods:
-exec ./bin/llama-server \
-    -m "$MODEL_PATH" \
-    --embedding \
-    --pooling mean \          # or 'last', 'cls' depending on model
-    -ub 4096 \               # adjust batch size for your model
-    --port 8080
-```
-
-**Step 4**: Update code if different special tokens are needed
+**Step 2**: Update the model path in llm_wrapper.py
 ```python
-# In llm_wrapper.py, modify the generate_embeddings function:
-if not text.endswith('<|endoftext|>'):
-    text = text + '<|endoftext|>'  # Change this for different models
+# Edit llm_wrapper.py, modify model_path variable:
+model_path = Path(__file__).parent / "llama.cpp/models/your-new-model.gguf"
+```
+
+**Step 3**: Adjust binary parameters if needed
+```python
+# In llm_wrapper.py, modify the cmd array:
+cmd = [
+    str(embedding_binary),
+    "-m", str(model_path),
+    "--pooling", "mean",      # or 'last', 'cls' depending on model
+    "-c", "4096",            # adjust context length for your model
+    "-b", "1",               # batch size
+    "-p", cleaned_text
+]
 ```
 
 #### 3. Model-Specific Considerations
 
-| Model Family | Special Token | Pooling | Context Length | Notes |
-|--------------|---------------|---------|----------------|--------|
-| Qwen3 | `<|endoftext|>` | last | 8192 | Current default |
+| Model Family | Special Processing | Pooling | Context Length | Notes |
+|--------------|-------------------|---------|----------------|--------|
+| Qwen3 | UTF-8 cleaning | mean | 4096 | Current default |
 | Nomic-Embed | None required | mean | 8192 | English optimized |
-| BGE | `[CLS]` | cls | 512 | BERT-based |
+| BGE | Text normalization | cls | 512 | BERT-based |
 | E5 | None required | mean/last | 4096 | Multilingual |
 
 ## Performance
@@ -334,16 +325,10 @@ if not text.endswith('<|endoftext|>'):
    Solution: Add API key to .env file
    ```
 
-2. **Embedding Server Not Running**:
+2. **Embedding Binary Missing**:
    ```
-   Error: Connection refused to embedding server
-   Solution: Start server with ./start_embedding_server.sh or check_server.py --start
-   ```
-
-3. **llama-server Binary Missing**:
-   ```
-   Error: llama-server binary not found
-   Solution: Build llama.cpp: cd llama.cpp/build && make llama-server
+   Error: llama-embedding binary not found
+   Solution: Build llama.cpp: cd llama.cpp/build && make llama-embedding
    ```
 
 4. **Model File Missing**:
@@ -364,16 +349,22 @@ if not text.endswith('<|endoftext|>'):
    Solution: Try broader queries or lower similarity threshold (-s 0.1)
    ```
 
-7. **Server Port Already in Use**:
+7. **Embedding Generation Timeout**:
    ```
-   Error: Port 8080 already in use
-   Solution: Kill existing server: pkill -f llama-server, or change port in scripts
+   Error: Embedding generation timed out
+   Solution: Reduce text length or increase timeout in llm_wrapper.py
    ```
 
-8. **CUDA/GPU Issues**:
+8. **Text Processing Issues**:
+   ```
+   Error: Text is empty after cleaning
+   Solution: Check document encoding or try different PDF extraction settings
+   ```
+
+9. **CUDA/GPU Issues**:
    ```
    Error: CUDA initialization failed
-   Solution: Rebuild llama.cpp without CUDA: cmake .. && make llama-server
+   Solution: Rebuild llama.cpp without CUDA: cmake .. && make llama-embedding
    ```
 
 ### Debug Mode
@@ -411,7 +402,7 @@ python check_server.py
 
 Before using the system, you need:
 
-1. **Build llama.cpp server**:
+1. **Build llama.cpp embedding binary**:
    ```bash
    cd llama.cpp
    
@@ -429,11 +420,11 @@ Before using the system, you need:
    # For Metal support (macOS):
    cmake .. -DGGML_METAL=ON
    
-   # Build the server
-   make llama-server
+   # Build the embedding binary
+   make llama-embedding
    
    # Verify build
-   ls -la bin/llama-server  # Should show the executable
+   ls -la bin/llama-embedding  # Should show the executable
    ```
 
 2. **Download Qwen3 embedding model** (if not already present):
@@ -445,16 +436,12 @@ Before using the system, you need:
    wget https://huggingface.co/Qwen/Qwen3-0.6B-Embedding-GGUF/resolve/main/qwen3-embedding-0.6b-q8_0.gguf
    ```
 
-3. **Verify server functionality**:
+3. **Verify embedding functionality**:
    ```bash
-   # Check if server binary exists and model is present
-   python check_server.py
+   # Test embedding generation directly
+   python llm_wrapper.py
    
-   # Start server manually for testing
-   ./start_embedding_server.sh
-   
-   # Or auto-start server
-   python check_server.py --start
+   # The test should show successful embedding generation
    ```
 
 4. **Test the complete setup**:
