@@ -31,6 +31,20 @@ This is an LLM RAG (Large Language Model - Retrieval Augmented Generation) syste
 - Updated `test_embedding_server()` and `auto_start_server()` functions to work with binary approach
 - Removed dependency on embedding server startup scripts
 
+**query.py**:
+- **Aligned with binary architecture**: Updated to use direct binary execution approach
+- Replaced `check_embedding_server()` with `check_embedding_system()` for binary validation
+- Updated `generate_query_embedding()` to remove server URL dependency
+- Modified main function to use binary-based embedding generation
+- Consistent with ingest.py and gradio_browser.py architecture
+
+**gradio_browser.py**:
+- **Aligned with binary architecture**: Updated imports and function calls
+- Replaced server-based embedding calls with direct binary approach
+- Updated `search_and_highlight()` to use `test_embedding_server()` and `generate_embeddings()`
+- Removed dependency on server URL parameters
+- Now fully compatible with binary-based embedding system
+
 #### New Files/Directories:
 
 **chroma_db/**:
@@ -39,6 +53,8 @@ This is an LLM RAG (Large Language Model - Retrieval Augmented Generation) syste
 
 **gradio_browser.py**:
 - New Gradio-based web interface for document browsing and search
+- Advanced multi-color highlighting with semantic relevance analysis
+- Sophisticated CSS styling and visual interface
 
 **llama.cpp/**:
 - Complete llama.cpp repository clone
@@ -76,7 +92,16 @@ Based on project structure, likely commands:
 - `python gradio_browser.py` - Launch web interface
 
 ## Development Notes
-- The system now uses direct binary execution for embeddings instead of server-based approach
+- **All components now aligned**: ingest.py, query.py, and gradio_browser.py use consistent binary-based architecture
+- The system uses direct binary execution for embeddings instead of server-based approach
 - UTF-8 handling has been improved across document processing pipeline
 - ChromaDB is used for vector storage and similarity search
 - Qwen3 embedding model (0.6B parameters, Q8_0 quantized) for high-quality embeddings
+- No server startup required - embeddings generated directly via `llama-embedding` binary
+
+## Architecture Status
+- ✅ **ingest.py**: Fully updated to binary approach
+- ✅ **llm_wrapper.py**: Core binary execution implementation
+- ✅ **query.py**: Aligned with binary architecture (no server dependencies)
+- ✅ **gradio_browser.py**: Aligned with binary architecture (no server dependencies)
+- ✅ **All tests passing**: Import, embedding generation, and functionality verified

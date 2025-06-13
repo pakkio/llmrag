@@ -14,9 +14,10 @@ import re
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from query import (
-    load_collections, search_collections, highlight_relevant_text,
-    llm_call, detect_language
+    list_available_collections, query_chroma_collections,
+    highlight_relevant_text, detect_language
 )
+from llm_wrapper import llm_call, generate_embeddings, test_embedding_server
 
 def create_advanced_highlight_prompt(query: str, text: str) -> str:
     """Create an enhanced prompt for sophisticated multi-color highlighting"""
@@ -211,23 +212,30 @@ def search_and_highlight(query: str, collection_names: str = "all") -> str:
         return "<p>Please enter a search query.</p>"
     
     try:
-        # Load collections
-        collections = load_collections()
+        # Check if embedding binary is available
+        if not test_embedding_server():
+            return "<p>Embedding system not available. Please check llama.cpp setup.</p>"
+        
+        # Get available collections
+        collections = list_available_collections()
         if not collections:
             return "<p>No collections found. Please run ingestion first.</p>"
         
         # Parse collection names
+        available_book_names = [book_name for book_name, _ in collections]
         if collection_names.lower() == "all":
-            selected_collections = list(collections.keys())
+            selected_pdf_name = None  # Search all collections
         else:
-            selected_collections = [name.strip() for name in collection_names.split(",")]
-            selected_collections = [name for name in selected_collections if name in collections]
+            # For simplicity, use the first valid collection name
+            selected_names = [name.strip() for name in collection_names.split(",")]
+            valid_names = [name for name in selected_names if name in available_book_names]
+            selected_pdf_name = valid_names[0] if valid_names else None
         
-        if not selected_collections:
-            return "<p>No valid collections specified.</p>"
+        # Generate query embedding using direct binary approach
+        query_embedding = generate_embeddings(query, normalize=True)
         
         # Perform search
-        all_results = search_collections(query, selected_collections, collections, top_k=5)
+        all_results = query_chroma_collections(query_embedding, top_k=5, pdf_name=selected_pdf_name)
         
         if not all_results:
             return "<p>No results found for your query.</p>"
@@ -235,24 +243,21 @@ def search_and_highlight(query: str, collection_names: str = "all") -> str:
         # Create enhanced HTML results
         html_results = [create_custom_css()]
         
-        for i, (distance, page_text, metadata) in enumerate(all_results[:5], 1):
+        for i, (pdf_name, page_number, page_text, similarity) in enumerate(all_results[:5], 1):
             # Process with enhanced highlighting
             highlighted_text = process_enhanced_highlighting(query, page_text)
             
             # Calculate relevance percentage
-            relevance = max(0, min(100, int((1 - distance) * 100)))
+            relevance = max(0, min(100, int(similarity * 100)))
             
             # Create result HTML
-            source = metadata.get('source', 'Unknown')
-            page = metadata.get('page', 'N/A')
-            
             result_html = f"""
             <div class="results-container">
                 <div class="result-header">Result #{i}</div>
                 <div class="relevance-score">Relevance: {relevance}%</div>
                 <div class="highlighted-content">{highlighted_text}</div>
                 <div class="source-info">
-                    <strong>Source:</strong> {source} | <strong>Page:</strong> {page}
+                    <strong>Source:</strong> {pdf_name} | <strong>Page:</strong> {page_number}
                 </div>
             </div>
             """

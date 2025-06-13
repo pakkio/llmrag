@@ -16,24 +16,17 @@ def setup_logging():
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
 
-def check_embedding_server(server_url: str = "http://127.0.0.1:8080"):
-    """Check if the Qwen3 embedding server is running, and auto-start if needed"""
-    logging.info("Checking Qwen3 embedding server...")
-    if not test_embedding_server(server_url):
-        logging.warning(f"Qwen3 embedding server is not responding at {server_url}")
-        logging.info("Attempting to start the server automatically...")
-        
-        if auto_start_server():
-            logging.info("Embedding server started successfully!")
-        else:
-            logging.error("Failed to auto-start embedding server")
-            logging.error("Please start the embedding server manually with:")
-            logging.error("./start_embedding_server.sh")
-            raise Exception("Embedding server not available")
+def check_embedding_system():
+    """Check if the Qwen3 embedding binary is available"""
+    logging.info("Checking Qwen3 embedding system...")
+    if not test_embedding_server():
+        logging.error("Embedding system not available")
+        logging.error("Please ensure llama.cpp binary and model are properly set up")
+        raise Exception("Embedding system not available")
     else:
-        logging.info("Qwen3 embedding server is running successfully")
+        logging.info("Qwen3 embedding system is working successfully")
     
-    return server_url
+    return True
 
 def list_available_collections() -> List[Tuple[str, int]]:
     """List all available PDF collections with page counts"""
@@ -119,11 +112,11 @@ def query_chroma_collections(query_embedding: np.ndarray, top_k: int = 10, pdf_n
         logging.error(f"Error querying Chroma collections: {e}")
         return []
 
-def generate_query_embedding(query: str, server_url: str = "http://127.0.0.1:8080") -> np.ndarray:
+def generate_query_embedding(query: str) -> np.ndarray:
     """Generate embedding for the query text using Qwen3 model"""
     try:
         logging.info(f"Generating embedding for query: '{query[:50]}...'")
-        embedding = generate_embeddings(query, server_url)
+        embedding = generate_embeddings(query, normalize=True)
         return embedding
     except Exception as e:
         logging.error(f"Error generating query embedding: {e}")
@@ -364,12 +357,12 @@ def main():
         parser.error("Query text is required unless using --list")
     
     try:
-        # Check embedding server
-        logging.info("Checking embedding server...")
-        server_url = check_embedding_server()
+        # Check embedding system
+        logging.info("Checking embedding system...")
+        check_embedding_system()
         
         # Generate query embedding
-        query_embedding = generate_query_embedding(args.query, server_url)
+        query_embedding = generate_query_embedding(args.query)
         
         # Query Chroma collections
         logging.info("Querying Chroma collections...")
