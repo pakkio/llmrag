@@ -768,14 +768,16 @@ def create_interface():
         search_button.click(
             fn=search_and_highlight,
             inputs=[query_input, collections_input],
-            outputs=results_output
+            outputs=results_output,
+            show_progress=True
         )
         
         # Also trigger search on Enter key
         query_input.submit(
             fn=search_and_highlight,
             inputs=[query_input, collections_input],
-            outputs=results_output
+            outputs=results_output,
+            show_progress=True
         )
         
         gr.HTML("""
