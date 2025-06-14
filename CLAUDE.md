@@ -81,18 +81,22 @@ llmrag/
 **Purpose**: Extract text from PDFs and generate embeddings
 
 **Key Functions**:
-- `extract_pdf_pages()` - Extract text from PDF with page range support
+- `extract_pdf_pages()` - Extract text from PDF with page range support and summary-only mode
 - `chunk_text()` - Smart text chunking (500 chars, 50 char overlap)
 - `generate_page_embeddings()` - Batch embedding generation
-- `save_to_chroma()` - Store embeddings in ChromaDB
+- `save_to_chroma()` - Store embeddings in ChromaDB with summary mode support
 - `check_embedding_system()` - Validate embedding API
+- `get_summary_pages()` - Identify key summary pages (TOC, scope sections, bibliography)
+- `is_summary_page()` - Detect summary content based on keywords and structure
 
 **Features**:
 - Page-by-page processing with progress tracking
+- **Summary-Only Mode**: Extract only key pages (table of contents, scope sections, bibliography) with `--summary` flag
 - Smart text chunking with word boundary preservation
 - UTF-8 compatibility with error handling
-- Metadata preservation (page numbers, chunk info)
+- Metadata preservation (page numbers, chunk info, summary classification)
 - Batch processing for efficiency
+- **Smart Page Detection**: Automatically identifies summary/overview pages based on content analysis
 
 ### 3. query.py - Semantic Search Engine
 **Purpose**: Search documents and display highlighted results
@@ -108,6 +112,7 @@ llmrag/
 **Features**:
 - Multi-collection search capability
 - Advanced text highlighting with color coding
+- **Enhanced Source Attribution**: Clear distinction between document sources and general knowledge with formatting `**source text** *(document, p.XX)*` vs `[general knowledge...]`
 - Multilingual explanations (Italian, Spanish, French, English)
 - Configurable similarity thresholds
 - Visual result formatting with borders and footnotes
@@ -232,8 +237,11 @@ cp .env.example .env  # Configure API keys
 # Test API connections
 python llm_wrapper.py
 
-# Process document
+# Process document (full document)
 python ingest.py document.pdf -v
+
+# Process document (summary pages only - TOC, scope sections, bibliography)
+python ingest.py document.pdf --summary -v
 
 # Search documents
 python query.py "search query" -v
@@ -304,6 +312,10 @@ The system is now completely clean of legacy code and ready for production use w
 - **Rich Text Processing**: Footnoted explanations and multi-level analysis sections
 - **Professional Presentation**: Color-coded sections and responsive design
 
-**Recent Enhancement**: Web interface now matches the sophistication of the terminal interface with rich highlighting, multi-level analysis, and professional styling.
+**Recent Enhancements**: 
+- **Summary-Only Ingestion**: New `--summary` flag allows processing only key document pages (table of contents, scope sections, bibliography) for quick overview extraction without full document processing
+- **Enhanced Source Attribution**: Clear formatting distinction between document sources `**text** *(doc, p.XX)*` and general knowledge `[text...]` in search results
+- **Smart Page Detection**: Automatic identification of summary/overview pages based on content analysis and structural patterns
+- **Web Interface Optimization**: Professional Gradio interface with rich highlighting, multi-level analysis, and clean CSS handling
 
 All legacy llama.cpp dependencies have been removed and the system now relies entirely on cloud APIs for maximum reliability and performance.
