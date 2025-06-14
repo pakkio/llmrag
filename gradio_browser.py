@@ -17,7 +17,7 @@ from query import (
     list_available_collections, query_chroma_collections,
     highlight_relevant_text, detect_language
 )
-from llm_wrapper import llm_call, generate_embeddings, test_embedding_server
+from llm_wrapper import llm_call, generate_embeddings, test_openai_embeddings
 
 def create_advanced_highlight_prompt(query: str, text: str) -> str:
     """Create an enhanced prompt for sophisticated multi-color highlighting"""
@@ -212,9 +212,9 @@ def search_and_highlight(query: str, collection_names: str = "all") -> str:
         return "<p>Please enter a search query.</p>"
     
     try:
-        # Check if embedding binary is available
-        if not test_embedding_server():
-            return "<p>Embedding system not available. Please check llama.cpp setup.</p>"
+        # Check if OpenAI embedding API is available
+        if not test_openai_embeddings():
+            return "<p>OpenAI embedding API not available. Please check OPENAI_API_KEY.</p>"
         
         # Get available collections
         collections = list_available_collections()
@@ -231,7 +231,7 @@ def search_and_highlight(query: str, collection_names: str = "all") -> str:
             valid_names = [name for name in selected_names if name in available_book_names]
             selected_pdf_name = valid_names[0] if valid_names else None
         
-        # Generate query embedding using direct binary approach
+        # Generate query embedding using OpenAI API
         query_embedding = generate_embeddings(query, normalize=True)
         
         # Perform search

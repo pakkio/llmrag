@@ -10,7 +10,7 @@ import fitz  # PyMuPDF
 import numpy as np
 import chromadb
 from tqdm import tqdm
-from llm_wrapper import generate_embeddings, test_embedding_server, auto_start_server
+from llm_wrapper import generate_embeddings, test_openai_embeddings, check_openai_api
 
 def setup_logging():
     """Configure logging"""
@@ -19,55 +19,64 @@ def setup_logging():
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
 
-def chunk_text(text: str, max_tokens: int = 1500, overlap_tokens: int = 150) -> List[str]:
+def chunk_text(text: str, max_chars: int = 500, overlap_chars: int = 50) -> List[str]:
     """
-    Split text into chunks with approximate token limits.
-    Uses simple word-based chunking with overlap to preserve context.
+    Split text into fixed-size character chunks with overlap to preserve context.
+    Optimized for embedding generation with 500-character chunks.
     """
     if not text.strip():
         return []
     
-    # Rough token approximation: ~4 characters per token for English
-    max_chars = max_tokens * 4
-    overlap_chars = overlap_tokens * 4
+    text = text.strip()
     
-    words = text.split()
-    if not words:
-        return []
+    # If text is shorter than max_chars, return as single chunk
+    if len(text) <= max_chars:
+        return [text]
     
     chunks = []
-    current_chunk = []
-    current_length = 0
+    start = 0
     
-    for word in words:
-        word_length = len(word) + 1  # +1 for space
+    while start < len(text):
+        # Calculate end position for this chunk
+        end = start + max_chars
         
-        # If adding this word would exceed max_chars, start a new chunk
-        if current_length + word_length > max_chars and current_chunk:
-            chunk_text = ' '.join(current_chunk)
-            chunks.append(chunk_text)
-            
-            # Create overlap for next chunk
-            overlap_words = []
-            overlap_length = 0
-            for i in range(len(current_chunk) - 1, -1, -1):
-                word_len = len(current_chunk[i]) + 1
-                if overlap_length + word_len <= overlap_chars:
-                    overlap_words.insert(0, current_chunk[i])
-                    overlap_length += word_len
+        # If this would be the last chunk and it's very short, merge with previous
+        if end >= len(text):
+            chunk = text[start:]
+            # If chunk is very short (less than 100 chars) and we have previous chunks,
+            # merge with the last chunk
+            if len(chunk) < 100 and chunks:
+                last_chunk = chunks.pop()
+                # Only merge if combined length doesn't exceed max_chars * 1.5
+                if len(last_chunk) + len(chunk) <= max_chars * 1.5:
+                    chunks.append(last_chunk + " " + chunk)
                 else:
-                    break
-            
-            current_chunk = overlap_words
-            current_length = overlap_length
+                    chunks.append(last_chunk)
+                    chunks.append(chunk)
+            else:
+                chunks.append(chunk)
+            break
         
-        current_chunk.append(word)
-        current_length += word_length
+        # Try to break at word boundary near the end position
+        chunk_text = text[start:end]
+        
+        # Look for the last space within the chunk to avoid breaking words
+        last_space = chunk_text.rfind(' ')
+        if last_space > max_chars * 0.7:  # Only break at word if it's not too far back
+            end = start + last_space
+            chunk_text = text[start:end]
+        
+        chunks.append(chunk_text.strip())
+        
+        # Move start position with overlap
+        start = end - overlap_chars
+        
+        # Ensure we don't go backwards
+        if start <= chunks[-1].__len__() // 2:  # Prevent infinite loops
+            start = end
     
-    # Add the last chunk if it exists
-    if current_chunk:
-        chunk_text = ' '.join(current_chunk)
-        chunks.append(chunk_text)
+    # Filter out empty chunks and ensure minimum length
+    chunks = [chunk.strip() for chunk in chunks if chunk.strip() and len(chunk.strip()) >= 20]
     
     return chunks
 
@@ -125,31 +134,33 @@ def extract_pdf_pages(pdf_path: str, from_page: int = 1, to_page: int = 0) -> Li
                 # Ensure UTF-8 compatibility by encoding/decoding with error handling
                 text = text.encode('utf-8', errors='replace').decode('utf-8')
                 
-                # Check if page is too large and needs chunking
-                chunks = chunk_text(text, max_tokens=1500, overlap_tokens=150)
+                # Chunk page text into 500-character chunks for better embeddings
+                chunks = chunk_text(text, max_chars=500, overlap_chars=50)
                 
                 if len(chunks) == 1:
-                    # Page fits in one chunk
+                    # Page fits in one chunk (≤500 chars)
                     pages.append({
                         'page_number': page_num + 1,
                         'text': text,
                         'source_file': pdf_path,
                         'chunk_id': None,
-                        'total_chunks': 1
+                        'total_chunks': 1,
+                        'chunk_size': len(text)
                     })
-                    logging.debug(f"Extracted page {page_num + 1}: {len(text)} characters")
+                    logging.debug(f"Extracted page {page_num + 1}: {len(text)} characters (single chunk)")
                 else:
-                    # Page needs chunking
-                    logging.info(f"Page {page_num + 1} is large ({len(text)} chars), splitting into {len(chunks)} chunks")
+                    # Page chunked into multiple 500-char pieces
+                    logging.info(f"Page {page_num + 1} ({len(text)} chars) split into {len(chunks)} chunks of ~500 chars each")
                     for chunk_idx, chunk in enumerate(chunks):
                         pages.append({
                             'page_number': page_num + 1,
                             'text': chunk,
                             'source_file': pdf_path,
                             'chunk_id': chunk_idx + 1,
-                            'total_chunks': len(chunks)
+                            'total_chunks': len(chunks),
+                            'chunk_size': len(chunk)
                         })
-                    logging.debug(f"Chunked page {page_num + 1} into {len(chunks)} pieces")
+                    logging.debug(f"Page {page_num + 1} chunk {chunk_idx + 1}: {len(chunk)} characters")
             else:
                 logging.debug(f"Page {page_num + 1} is empty, skipping")
         
@@ -161,33 +172,24 @@ def extract_pdf_pages(pdf_path: str, from_page: int = 1, to_page: int = 0) -> Li
     
     return pages
 
-def check_embedding_server(server_url: str = "http://127.0.0.1:8080"):
+def check_embedding_system():
     """
-    Check if the Qwen3 embedding server is running, and auto-start if needed.
+    Check if OpenAI API key is available and embedding API is working.
     """
-    logging.info("Checking Qwen3 embedding server...")
-    if not test_embedding_server(server_url):
-        logging.warning(f"Qwen3 embedding server is not responding at {server_url}")
-        logging.info("Attempting to start the server automatically...")
-        
-        if auto_start_server():
-            logging.info("Embedding server started successfully!")
-        else:
-            logging.error("Failed to auto-start embedding server")
-            logging.error("Please start the embedding server manually with:")
-            logging.error("./start_embedding_server.sh")
-            raise Exception("Embedding server not available")
+    logging.info("Checking OpenAI embedding API...")
+    if not test_openai_embeddings():
+        logging.error("OpenAI embedding API not available")
+        logging.error("Please ensure OPENAI_API_KEY is set in your environment")
+        raise Exception("OpenAI embedding API not available")
     else:
-        logging.info("Qwen3 embedding server is running successfully")
-    
-    return server_url
+        logging.info("OpenAI embedding API is working successfully")
 
-def generate_page_embeddings(pages: List[Dict[str, Any]], server_url: str = "http://127.0.0.1:8080") -> List[Dict[str, Any]]:
+def generate_page_embeddings(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Generate embeddings for each page using the Qwen3 model via llama.cpp server.
+    Generate embeddings for each page using OpenAI's text-embedding-3-large.
     Includes error recovery to continue processing after failures.
     """
-    logging.info(f"Generating embeddings for {len(pages)} pages using Qwen3 model")
+    logging.info(f"Generating embeddings for {len(pages)} pages using OpenAI text-embedding-3-large")
     
     # Extract text content
     texts = [page['text'] for page in pages]
@@ -201,7 +203,7 @@ def generate_page_embeddings(pages: List[Dict[str, Any]], server_url: str = "htt
         for i, text in enumerate(texts):
             try:
                 # Generate embedding for single text
-                embedding = generate_embeddings([text], server_url)
+                embedding = generate_embeddings([text])
                 embeddings[i] = embedding
                 successful_count += 1
                 
@@ -309,7 +311,8 @@ def save_to_chroma(pages: List[Dict[str, Any]], pdf_path: str):
             metadata = {
                 'page_number': page['page_number'],
                 'source_file': pdf_path,
-                'text_length': len(page['text'])
+                'text_length': len(page['text']),
+                'chunk_size': page.get('chunk_size', len(page['text']))
             }
             
             # Add chunk information if available
@@ -317,8 +320,10 @@ def save_to_chroma(pages: List[Dict[str, Any]], pdf_path: str):
                 metadata['chunk_id'] = page['chunk_id']
                 metadata['total_chunks'] = page['total_chunks']
                 metadata['is_chunked'] = True
+                metadata['chunk_type'] = '500char_chunk'
             else:
                 metadata['is_chunked'] = False
+                metadata['chunk_type'] = 'single_page'
                 
             metadatas.append(metadata)
             ids.append(page_id)
@@ -396,13 +401,13 @@ def main():
             if len(pages) < original_count:
                 logging.info(f"Limited to first {len(pages)} pages from the selected range")
         
-        # Check embedding server
-        logging.info("Checking embedding server...")
-        server_url = check_embedding_server()
+        # Check embedding system
+        logging.info("Checking embedding system...")
+        check_embedding_system()
         
         # Generate embeddings
         logging.info("Generating embeddings...")
-        pages_with_embeddings = generate_page_embeddings(pages, server_url)
+        pages_with_embeddings = generate_page_embeddings(pages)
         
         # Save results to Chroma
         logging.info("Saving to Chroma database...")

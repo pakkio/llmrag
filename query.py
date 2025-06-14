@@ -6,8 +6,9 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Tuple
 import numpy as np
+import re
 import chromadb
-from llm_wrapper import llm_call, generate_embeddings, test_embedding_server, auto_start_server
+from llm_wrapper import llm_call, generate_embeddings, test_openai_embeddings, check_openai_api
 
 def setup_logging():
     """Configure logging"""
@@ -17,14 +18,14 @@ def setup_logging():
     )
 
 def check_embedding_system():
-    """Check if the Qwen3 embedding binary is available"""
-    logging.info("Checking Qwen3 embedding system...")
-    if not test_embedding_server():
-        logging.error("Embedding system not available")
-        logging.error("Please ensure llama.cpp binary and model are properly set up")
-        raise Exception("Embedding system not available")
+    """Check if OpenAI API key is available and embedding API is working"""
+    logging.info("Checking OpenAI embedding API...")
+    if not test_openai_embeddings():
+        logging.error("OpenAI embedding API not available")
+        logging.error("Please ensure OPENAI_API_KEY is set in your environment")
+        raise Exception("OpenAI embedding API not available")
     else:
-        logging.info("Qwen3 embedding system is working successfully")
+        logging.info("OpenAI embedding API is working successfully")
     
     return True
 
@@ -113,7 +114,7 @@ def query_chroma_collections(query_embedding: np.ndarray, top_k: int = 10, pdf_n
         return []
 
 def generate_query_embedding(query: str) -> np.ndarray:
-    """Generate embedding for the query text using Qwen3 model"""
+    """Generate embedding for the query text using OpenAI text-embedding-3-large"""
     try:
         logging.info(f"Generating embedding for query: '{query[:50]}...'")
         embedding = generate_embeddings(query, normalize=True)
@@ -225,7 +226,6 @@ def create_page_border(title: str, width: int = 70) -> Tuple[str, str, str]:
 
 def process_highlighted_text(highlighted_text: str) -> Tuple[str, List[str]]:
     """Separate the main text from explanations and add footnote numbering"""
-    import re
     
     # Extract explanations
     explanations = []
