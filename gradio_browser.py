@@ -708,9 +708,8 @@ def search_and_highlight(query: str, collection_names: str = "all") -> str:
             summary_info += f" | **Best:** {best_result[0]} Page {best_result[1]} ({best_result[3]:.4f}) | **Worst:** {worst_result[0]} Page {worst_result[1]} ({worst_result[3]:.4f})"
         markdown_results.append(f"\n{summary_info}\n")
         
-        # Add CSS styling for proper display
-        css_styles = create_custom_css()
-        final_result = css_styles + "\n\n" + "".join(markdown_results)
+        # Return clean markdown results without CSS (CSS is handled by Gradio's css parameter)
+        final_result = "".join(markdown_results)
         
         return final_result
         

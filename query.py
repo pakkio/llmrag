@@ -431,7 +431,7 @@ Provide a structured analysis (3-4 paragraphs) that helps someone understand the
     return "Synthesis unavailable for these results."
 
 def generate_direct_answer(query: str, results: List[Tuple[str, int, str, float]], max_results: int = 5) -> str:
-    """Generate a comprehensive, detailed answer to the query based on search results"""
+    """Generate a comprehensive, detailed answer to the query based on search results with source attribution"""
     if not results:
         return "No information found to answer the query."
     
@@ -443,13 +443,17 @@ def generate_direct_answer(query: str, results: List[Tuple[str, int, str, float]
     
     # Create language-specific instructions
     if detected_language == "italian":
-        language_instruction = "Rispondi in italiano con una risposta dettagliata e completa."
+        language_instruction = "Rispondi in italiano con una risposta dettagliata e completa. Distingui chiaramente tra informazioni dalle fonti documentali e conoscenza generale."
+        source_format_instruction = "Per le informazioni dalle fonti usa: **testo dalle fonti** *(nome_documento, p.XX)* \nPer la conoscenza generale usa: [testo generale...]"
     elif detected_language == "spanish":
-        language_instruction = "Responde en español con una respuesta detallada y completa."
+        language_instruction = "Responde en español con una respuesta detallada y completa. Distingue claramente entre información de las fuentes documentales y conocimiento general."
+        source_format_instruction = "Para información de fuentes usa: **texto de fuentes** *(nombre_documento, p.XX)* \nPara conocimiento general usa: [texto general...]"
     elif detected_language == "french":
-        language_instruction = "Répondez en français avec una réponse détaillée et complète."
+        language_instruction = "Répondez en français avec una réponse détaillée et complète. Distinguez clairement entre les informations des sources documentaires et les connaissances générales."
+        source_format_instruction = "Pour les informations des sources utilisez: **texte des sources** *(nom_document, p.XX)* \nPour les connaissances générales utilisez: [texte général...]"
     else:
-        language_instruction = "Respond in English with a detailed and comprehensive answer."
+        language_instruction = "Respond in English with a detailed and comprehensive answer. Clearly distinguish between information from documentary sources and general knowledge."
+        source_format_instruction = "For information from sources use: **text from sources** *(document_name, p.XX)* \nFor general knowledge use: [general text...]"
     
     # Build context from all results
     results_context = ""
@@ -467,20 +471,24 @@ Based on the following sources, provide a comprehensive and detailed answer to t
 Sources:
 {results_context}
 
+CRITICAL FORMATTING REQUIREMENTS:
+{source_format_instruction}
+
 Instructions:
-1. Provide a comprehensive answer using all relevant information from the sources
-2. Include specific details, examples, and explanations when available
-3. Organize your response logically with clear structure
-4. Synthesize information from multiple sources when relevant
-5. Include key facts, concepts, and context that help fully answer the question
-6. Expand on important points with supporting details from the sources
-7. Use bullet points or numbered lists when appropriate for clarity
-8. Do NOT include meta-analysis about search quality or methodology
-9. Focus entirely on delivering substantive content that answers the query
+1. CLEARLY DISTINGUISH between information from sources and general knowledge
+2. For ANY information taken directly from the provided sources, use **bold text** followed by source citation *(document_name, p.XX)*
+3. For general knowledge or contextual information not in the sources, use [square brackets...]
+4. Include specific details, examples, and explanations when available
+5. Organize your response logically with clear structure
+6. Synthesize information from multiple sources when relevant
+7. Include key facts, concepts, and context that help fully answer the question
+8. Use bullet points or numbered lists when appropriate for clarity
+9. Do NOT include meta-analysis about search quality or methodology
+10. Focus entirely on delivering substantive content that answers the query
 
 {language_instruction}
 
-Provide a detailed, comprehensive answer of 3-8 paragraphs that thoroughly addresses the query using the available information."""
+Provide a detailed, comprehensive answer of 3-8 paragraphs that thoroughly addresses the query using the available information with proper source attribution."""
         }
     ]
     

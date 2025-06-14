@@ -80,7 +80,63 @@ def chunk_text(text: str, max_chars: int = 500, overlap_chars: int = 50) -> List
     
     return chunks
 
-def extract_pdf_pages(pdf_path: str, from_page: int = 1, to_page: int = 0) -> List[Dict[str, Any]]:
+def get_summary_pages(pdf_path: str) -> List[int]:
+    """
+    Identify pages that contain summary content (table of contents, scope sections, overviews).
+    Returns a list of page numbers (1-based) that should be processed for summary content.
+    
+    Based on analysis of "Great Mythologies of the World" structure:
+    - Pages 1, 10-16: Course title and table of contents
+    - Pages 106, 191, 192, 269: Regional scope sections with thematic overviews
+    - Pages 485+: Bibliography and reference sections
+    """
+    # Default summary pages based on document analysis
+    summary_pages = [1]  # Title page
+    
+    # Table of contents pages
+    summary_pages.extend(range(10, 17))  # Pages 10-16
+    
+    # Regional scope pages (thematic overviews)
+    summary_pages.extend([106, 191, 192, 269])
+    
+    # Bibliography section (starting around page 485)
+    summary_pages.extend(range(485, 495))  # Estimated range for bibliography
+    
+    return sorted(summary_pages)
+
+def is_summary_page(page_text: str, page_number: int) -> bool:
+    """
+    Determine if a page contains summary/overview content based on keywords and structure.
+    """
+    text_lower = page_text.lower()
+    
+    # Keywords that indicate summary content
+    summary_keywords = [
+        'table of contents', 'contents', 'introduction', 'scope', 
+        'overview', 'summary', 'lecture guides', 'professor biographies',
+        'bibliography', 'supplemental material', 'course outline',
+        'syllabus', 'index'
+    ]
+    
+    # Check for summary keywords
+    for keyword in summary_keywords:
+        if keyword in text_lower:
+            return True
+    
+    # Check for structural indicators
+    if 'lecture' in text_lower and ('guide' in text_lower or 'outline' in text_lower):
+        return True
+    
+    # Check for section headers that indicate overviews
+    if any(phrase in text_lower for phrase in [
+        'this section', 'this course', 'mythology of', 'mythologies of',
+        'provides an introduction', 'survey of', 'explores the'
+    ]):
+        return True
+    
+    return False
+
+def extract_pdf_pages(pdf_path: str, from_page: int = 1, to_page: int = 0, summary_only: bool = False) -> List[Dict[str, Any]]:
     """
     Extract text content from each page of a PDF file.
     Large pages are automatically chunked to prevent token limit issues.
@@ -90,6 +146,7 @@ def extract_pdf_pages(pdf_path: str, from_page: int = 1, to_page: int = 0) -> Li
         pdf_path: Path to the PDF file
         from_page: Start processing from this page (1-based, default: 1)
         to_page: Stop processing at this page (1-based, 0 means last page)
+        summary_only: If True, extract only summary/overview pages (table of contents, scope sections, etc.)
     """
     if not os.path.exists(pdf_path):
         raise FileNotFoundError(f"PDF file not found: {pdf_path}")
@@ -117,15 +174,29 @@ def extract_pdf_pages(pdf_path: str, from_page: int = 1, to_page: int = 0) -> Li
             doc.close()
             return []
         
-        pages_to_process = to_page - from_page + 1
-        logging.info(f"Processing PDF: {pdf_path} (pages {from_page}-{to_page} of {total_pages} total)")
+        # Handle summary-only mode
+        if summary_only:
+            summary_pages = get_summary_pages(pdf_path)
+            # Filter summary pages to be within the specified range
+            summary_pages = [p for p in summary_pages if from_page <= p <= to_page]
+            if not summary_pages:
+                logging.warning(f"No summary pages found in range {from_page}-{to_page}")
+                doc.close()
+                return []
+            
+            logging.info(f"Processing PDF in summary mode: {pdf_path}")
+            logging.info(f"Summary pages to process: {summary_pages}")
+            pages_to_process = len(summary_pages)
+            page_range = summary_pages
+        else:
+            pages_to_process = to_page - from_page + 1
+            logging.info(f"Processing PDF: {pdf_path} (pages {from_page}-{to_page} of {total_pages} total)")
+            page_range = range(from_page, to_page + 1)
         
-        # Convert to 0-based indexing for loop
-        start_idx = from_page - 1
-        end_idx = to_page
-        
-        for page_num in tqdm(range(start_idx, end_idx), desc="Extracting pages", unit="page"):
-            page = doc[page_num]
+        for page_num in tqdm(page_range, desc="Extracting pages", unit="page"):
+            # Convert to 0-based index for PyMuPDF (page_num is 1-based)
+            page_idx = page_num - 1
+            page = doc[page_idx]
             text = page.get_text()
             
             # Skip empty pages
@@ -134,35 +205,48 @@ def extract_pdf_pages(pdf_path: str, from_page: int = 1, to_page: int = 0) -> Li
                 # Ensure UTF-8 compatibility by encoding/decoding with error handling
                 text = text.encode('utf-8', errors='replace').decode('utf-8')
                 
+                # In summary mode, verify this is actually a summary page
+                if summary_only and not is_summary_page(text, page_num):
+                    logging.debug(f"Page {page_num} doesn't appear to contain summary content, skipping")
+                    continue
+                
                 # Chunk page text into 500-character chunks for better embeddings
                 chunks = chunk_text(text, max_chars=500, overlap_chars=50)
                 
                 if len(chunks) == 1:
                     # Page fits in one chunk (≤500 chars)
-                    pages.append({
-                        'page_number': page_num + 1,
+                    page_data = {
+                        'page_number': page_num,
                         'text': text,
                         'source_file': pdf_path,
                         'chunk_id': None,
                         'total_chunks': 1,
                         'chunk_size': len(text)
-                    })
-                    logging.debug(f"Extracted page {page_num + 1}: {len(text)} characters (single chunk)")
+                    }
+                    if summary_only:
+                        page_data['is_summary'] = True
+                        page_data['content_type'] = 'summary'
+                    pages.append(page_data)
+                    logging.debug(f"Extracted page {page_num}: {len(text)} characters (single chunk)")
                 else:
                     # Page chunked into multiple 500-char pieces
-                    logging.info(f"Page {page_num + 1} ({len(text)} chars) split into {len(chunks)} chunks of ~500 chars each")
+                    logging.info(f"Page {page_num} ({len(text)} chars) split into {len(chunks)} chunks of ~500 chars each")
                     for chunk_idx, chunk in enumerate(chunks):
-                        pages.append({
-                            'page_number': page_num + 1,
+                        chunk_data = {
+                            'page_number': page_num,
                             'text': chunk,
                             'source_file': pdf_path,
                             'chunk_id': chunk_idx + 1,
                             'total_chunks': len(chunks),
                             'chunk_size': len(chunk)
-                        })
-                    logging.debug(f"Page {page_num + 1} chunk {chunk_idx + 1}: {len(chunk)} characters")
+                        }
+                        if summary_only:
+                            chunk_data['is_summary'] = True
+                            chunk_data['content_type'] = 'summary'
+                        pages.append(chunk_data)
+                    logging.debug(f"Page {page_num} chunk {chunk_idx + 1}: {len(chunk)} characters")
             else:
-                logging.debug(f"Page {page_num + 1} is empty, skipping")
+                logging.debug(f"Page {page_num} is empty, skipping")
         
         doc.close()
         
@@ -265,9 +349,10 @@ def generate_page_embeddings(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]
     
     return successful_pages
 
-def save_to_chroma(pages: List[Dict[str, Any]], pdf_path: str):
+def save_to_chroma(pages: List[Dict[str, Any]], pdf_path: str, summary_only: bool = False):
     """
     Save pages and embeddings to Chroma vector database.
+    If summary_only is True, adds summary pages to existing collection without deleting it.
     """
     try:
         pdf_name = Path(pdf_path).stem  # Get filename without extension
@@ -280,17 +365,44 @@ def save_to_chroma(pages: List[Dict[str, Any]], pdf_path: str):
         clean_name = "".join(c if c.isalnum() or c in "_-" else "_" for c in pdf_name)
         collection_name = f"pdf_{clean_name}"
         
-        # Delete existing collection if it exists (for re-ingestion)
-        try:
-            client.delete_collection(name=collection_name)
-            logging.info(f"Deleted existing collection: {collection_name}")
-        except:
-            pass  # Collection doesn't exist, that's fine
-        
-        collection = client.create_collection(
-            name=collection_name,
-            metadata={"source": pdf_path, "total_pages": len(pages)}
-        )
+        # Handle collection creation/retrieval based on mode
+        if summary_only:
+            # In summary mode, try to get existing collection or create new one
+            try:
+                collection = client.get_collection(name=collection_name)
+                logging.info(f"Using existing collection: {collection_name}")
+                
+                # Check for existing summary pages and remove them to avoid duplicates
+                existing_summary_ids = []
+                try:
+                    # Get all documents with summary metadata
+                    results = collection.get(where={"is_summary": True})
+                    if results and results['ids']:
+                        existing_summary_ids = results['ids']
+                        collection.delete(ids=existing_summary_ids)
+                        logging.info(f"Removed {len(existing_summary_ids)} existing summary pages to avoid duplicates")
+                except Exception as e:
+                    logging.debug(f"No existing summary pages found or error checking: {e}")
+                
+            except ValueError:
+                # Collection doesn't exist, create it
+                collection = client.create_collection(
+                    name=collection_name,
+                    metadata={"source": pdf_path, "total_pages": len(pages)}
+                )
+                logging.info(f"Created new collection: {collection_name}")
+        else:
+            # Normal mode: delete existing collection if it exists (for re-ingestion)
+            try:
+                client.delete_collection(name=collection_name)
+                logging.info(f"Deleted existing collection: {collection_name}")
+            except:
+                pass  # Collection doesn't exist, that's fine
+            
+            collection = client.create_collection(
+                name=collection_name,
+                metadata={"source": pdf_path, "total_pages": len(pages)}
+            )
         
         # Prepare data for batch insertion
         documents = []
@@ -300,10 +412,18 @@ def save_to_chroma(pages: List[Dict[str, Any]], pdf_path: str):
         
         for page in pages:
             # Create unique ID for each page/chunk
-            if page.get('chunk_id'):
-                page_id = f"page_{page['page_number']}_chunk_{page['chunk_id']}"
+            if page.get('is_summary'):
+                # Use unique prefix for summary pages to avoid conflicts
+                if page.get('chunk_id'):
+                    page_id = f"summary_page_{page['page_number']}_chunk_{page['chunk_id']}"
+                else:
+                    page_id = f"summary_page_{page['page_number']}"
             else:
-                page_id = f"page_{page['page_number']}"
+                # Regular page IDs
+                if page.get('chunk_id'):
+                    page_id = f"page_{page['page_number']}_chunk_{page['chunk_id']}"
+                else:
+                    page_id = f"page_{page['page_number']}"
             
             documents.append(page['text'])
             
@@ -324,13 +444,24 @@ def save_to_chroma(pages: List[Dict[str, Any]], pdf_path: str):
             else:
                 metadata['is_chunked'] = False
                 metadata['chunk_type'] = 'single_page'
+            
+            # Add summary information if available
+            if page.get('is_summary'):
+                metadata['is_summary'] = True
+                metadata['content_type'] = page.get('content_type', 'summary')
+            else:
+                metadata['is_summary'] = False
+                metadata['content_type'] = 'regular'
                 
             metadatas.append(metadata)
             ids.append(page_id)
         
         # Add all pages to collection in batch with progress
-        logging.info(f"Saving {len(pages)} pages to ChromaDB...")
-        with tqdm(total=1, desc="Saving to ChromaDB", unit="batch") as pbar:
+        mode_desc = "summary pages" if summary_only else "pages"
+        action_desc = "Adding" if summary_only else "Saving"
+        logging.info(f"{action_desc} {len(pages)} {mode_desc} to ChromaDB...")
+        
+        with tqdm(total=1, desc=f"{action_desc} to ChromaDB", unit="batch") as pbar:
             collection.add(
                 documents=documents,
                 embeddings=embeddings,
@@ -339,7 +470,10 @@ def save_to_chroma(pages: List[Dict[str, Any]], pdf_path: str):
             )
             pbar.update(1)
         
-        logging.info(f"Saved {len(pages)} pages to Chroma collection: {collection_name}")
+        if summary_only:
+            logging.info(f"Added {len(pages)} summary pages to existing Chroma collection: {collection_name}")
+        else:
+            logging.info(f"Saved {len(pages)} pages to Chroma collection: {collection_name}")
         logging.info(f"Chroma database location: ./chroma_db")
         
     except Exception as e:
@@ -353,6 +487,7 @@ def main():
     parser.add_argument('-p', '--pages', type=int, default=0, help='Number of pages to process from the selected range (0 means all pages in range)')
     parser.add_argument('--from-page', type=int, default=1, help='Start processing from this page number (1-based, default: 1)')
     parser.add_argument('--to-page', type=int, default=0, help='Stop processing at this page number (1-based, 0 means last page)')
+    parser.add_argument('--summary', action='store_true', help='Extract only summary/overview pages (table of contents, scope sections, etc.)')
     
     args = parser.parse_args()
     
@@ -388,7 +523,7 @@ def main():
         
         # Extract pages from PDF
         logging.info("Starting PDF page extraction...")
-        pages = extract_pdf_pages(str(pdf_path), args.from_page, args.to_page)
+        pages = extract_pdf_pages(str(pdf_path), args.from_page, args.to_page, args.summary)
         
         if not pages:
             logging.warning("No text content found in PDF")
@@ -411,7 +546,7 @@ def main():
         
         # Save results to Chroma
         logging.info("Saving to Chroma database...")
-        save_to_chroma(pages_with_embeddings, str(pdf_path))
+        save_to_chroma(pages_with_embeddings, str(pdf_path), args.summary)
         
         logging.info(f"Successfully processed {len(pages)} pages from {pdf_path}")
         
