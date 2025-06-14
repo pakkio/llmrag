@@ -30,22 +30,15 @@ def close_web_border() -> str:
 
 def process_highlighted_text_for_html(highlighted_text: str) -> Tuple[str, List[str]]:
     """Convert query.py style highlighting to HTML and separate explanations"""
-    # Extract explanations first (before converting to HTML)
-    explanations = []
-    explanation_pattern = r'\[EXPLAIN\](.*?)\[/EXPLAIN\]'
-    explanations = re.findall(explanation_pattern, highlighted_text)
-    
-    # Remove explanations from main text and add footnote numbers
+    # Convert [[...]] to italic text inline
     clean_text = highlighted_text
-    for i, explanation in enumerate(explanations, 1):
-        # Replace explanation with footnote number
-        clean_text = re.sub(r'\[EXPLAIN\].*?\[/EXPLAIN\]', f'<sup class="footnote-number">[{i}]</sup>', clean_text, count=1)
+    clean_text = re.sub(r'\[\[(.*?)\]\]', r'<em class="explanation-text">\1</em>', clean_text)
     
     # Convert [HIGHLIGHT] tags to HTML
     clean_text = clean_text.replace('[HIGHLIGHT]', '<span class="highlight-text">')
     clean_text = clean_text.replace('[/HIGHLIGHT]', '</span>')
     
-    return clean_text, explanations
+    return clean_text, []  # Explanations are now inline, no separate list needed
 
 def analyze_individual_result_web(query: str, text_content: str, pdf_name: str, page_number: int, similarity: float) -> str:
     """Generate individual result analysis for web display (from query.py)"""
@@ -124,7 +117,7 @@ Please provide a comprehensive synthesis that:
 
 {language_instruction}
 
-Provide a structured analysis (3-4 paragraphs) that helps someone understand the collective meaning and value of these search results."""
+Use [[...]] to highlight any inferred information or assumptions, and format them as italic text inline."""
         }
     ]
     
@@ -158,568 +151,316 @@ def process_highlighting_for_gradio(query: str, results: List[Tuple[str, int, st
 
 
 def create_custom_css() -> str:
-    """Create CSS with proper dark theme support"""
+    """Create CSS with clean, readable color scheme using white backgrounds with blue/green text"""
     return """
     <style>
-    /* Light theme defaults */
+    /* Light theme defaults with white backgrounds and blue/green text */
     .results-container {
         background: #ffffff;
-        color: #2d3748;
+        color: #222;
         border: 2px solid #e2e8f0;
         border-radius: 8px;
         padding: 1.5rem;
         margin: 1rem 0;
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
-    
-    /* Bordered sections */
     .border-default {
-        background: #f8fafc;
-        border: 2px solid #cbd5e0;
+        background: #ffffff;
+        border: 2px solid #bbb;
         border-radius: 8px;
         margin: 1rem 0;
         overflow: hidden;
     }
-    
     .border-content {
-        background: #f8fafc;
-        border: 2px solid #3182ce;
+        background: #ffffff;
+        border: 2px solid #1a73e8;
         border-radius: 8px;
         margin: 1rem 0;
         overflow: hidden;
     }
-    
     .border-analysis {
-        background: #fef5e7;
-        border: 2px solid #d69e2e;
+        background: #ffffff;
+        border: 2px solid #ff9800;
         border-radius: 8px;
         margin: 1rem 0;
         overflow: hidden;
     }
-    
     .border-synthesis {
-        background: #f0fff4;
-        border: 2px solid #38a169;
+        background: #ffffff;
+        border: 2px solid #00b300;
         border-radius: 8px;
         margin: 1rem 0;
-        overflow: hidden;
+        overflow: hidden.
     }
-    
     .border-title {
-        background: #4a5568;
-        color: white;
+        background: #1a73e8;
+        color: #fff;
         padding: 0.75rem 1rem;
         font-weight: 600;
         font-size: 1.1em;
-        border-bottom: 2px solid #2d3748;
+        border-bottom: 2px solid #1a73e8;
     }
-    
     .border-content .border-title {
-        background: #3182ce;
-        border-bottom: 2px solid #2c5282;
+        background: #1a73e8;
+        border-bottom: 2px solid #1a73e8;
     }
-    
     .border-analysis .border-title {
-        background: #d69e2e;
-        color: #1a202c;
-        border-bottom: 2px solid #b7791f;
+        background: #ff9800;
+        color: #222;
+        border-bottom: 2px solid #ff9800;
     }
-    
     .border-synthesis .border-title {
-        background: #38a169;
-        border-bottom: 2px solid #2f855a;
+        background: #00b300;
+        color: #fff;
+        border-bottom: 2px solid #00b300;
     }
-    
-    .border-content > div:last-child {
-        padding: 1.5rem;
-    }
-    
-    .footnote-number {
-        background: #3182ce;
-        color: white;
-        padding: 2px 6px;
-        border-radius: 50%;
-        font-size: 0.8em;
-        font-weight: 600;
-        margin-left: 2px;
-    }
-    
-    .explanations-list {
-        background: #f7fafc;
-        border: 1px solid #e2e8f0;
-        border-radius: 6px;
-        padding: 1rem;
-        margin: 1rem 0;
-    }
-    
-    .explanation-item {
-        margin: 0.5rem 0;
-        padding: 0.5rem;
-        background: white;
-        border-radius: 4px;
-        border-left: 4px solid #3182ce;
-    }
-    
-    .explanation-number {
-        color: #3182ce;
-        font-weight: 600;
-        margin-right: 0.5rem;
-    }
-    
-    .individual-analysis {
-        background: #fef5e7;
-        color: #744210;
-        padding: 1rem;
-        border-radius: 6px;
-        margin: 1rem 0;
-        font-style: italic;
-    }
-    
-    .synthesis-content {
-        background: #f0fff4;
-        color: #276749;
-        padding: 1.5rem;
-        border-radius: 6px;
-        margin: 1rem 0;
-        line-height: 1.6;
-    }
-    
     .highlight-text {
-        background-color: #fbbf24;
-        color: #1a202c;
+        background-color: #e8f0fe !important;
+        color: #1a73e8 !important;
         padding: 2px 4px;
         border-radius: 3px;
-        font-weight: 600;
-    }
-    
-    .explain-text {
-        font-size: 0.9em;
-        color: #3182ce;
-        font-style: italic;
-        margin-left: 3px;
-    }
-    
-    .result-header {
-        font-size: 1.1em;
-        font-weight: 600;
-        color: #2b6cb0;
-        margin-bottom: 0.5rem;
-        border-bottom: 2px solid #cbd5e0;
-        padding-bottom: 0.5rem;
-    }
-    
-    .relevance-score {
-        background: #3182ce;
-        color: white;
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-size: 0.8em;
-        font-weight: 600;
-        display: inline-block;
-        margin-bottom: 1rem;
-    }
-    
-    .source-info {
-        font-size: 0.9em;
-        color: #718096;
-        margin-top: 1rem;
-        padding-top: 0.5rem;
-        border-top: 1px solid #e2e8f0;
-    }
-    
-    .direct-answer-container {
-        background: #f0fff4;
-        border: 2px solid #38a169;
-        padding: 1.5rem;
-        border-radius: 8px;
-        margin: 2rem 0;
-    }
-    
-    .direct-answer-header {
-        font-size: 1.3em;
         font-weight: 700;
-        color: #276749;
-        margin-bottom: 1rem;
+        border: 1px solid #1a73e8;
     }
-    
-    .direct-answer-content {
-        font-size: 1.0em;
-        color: #276749;
-        line-height: 1.6;
-    }
-    
-    .direct-answer-content h1, .direct-answer-content h2, .direct-answer-content h3, 
-    .direct-answer-content h4, .direct-answer-content h5, .direct-answer-content h6 {
-        color: #2c7a2c;
-        margin: 1em 0 0.5em 0;
-    }
-    
-    .direct-answer-content ul, .direct-answer-content ol {
-        margin: 0.5em 0;
-        padding-left: 1.5em;
-    }
-    
-    .direct-answer-content li {
-        margin: 0.3em 0;
-    }
-    
-    .direct-answer-content p {
-        margin: 0.8em 0;
-    }
-    
-    .direct-answer-content code {
-        background: #e8f5e8;
-        padding: 2px 4px;
-        border-radius: 3px;
-        font-family: 'Courier New', monospace;
-        color: #2c7a2c;
-    }
-    
-    .direct-answer-content pre {
-        background: #e8f5e8;
-        padding: 1em;
-        border-radius: 5px;
-        overflow-x: auto;
-        margin: 1em 0;
-    }
-    
-    .direct-answer-content blockquote {
-        border-left: 4px solid #38a169;
-        margin: 1em 0;
-        padding-left: 1em;
+    .explanation-text {
+        color: #ff5722 !important;
         font-style: italic;
-        color: #2c7a2c;
     }
-    
-    .direct-answer-content strong, .direct-answer-content b {
-        font-weight: 700;
-        color: #2c7a2c;
-    }
-    
-    .direct-answer-content em, .direct-answer-content i {
-        font-style: italic;
-        color: #2c7a2c;
-    }
-    
-    .section-separator {
-        height: 2px;
-        background: #3182ce;
-        margin: 2rem 0;
-        border-radius: 1px;
-    }
-    
-    .detailed-analysis-header {
-        font-size: 1.2em;
-        font-weight: 600;
-        color: #2b6cb0;
-        margin: 2rem 0 1rem 0;
+    .logs-container {
+        border: 2px dashed #888;
         padding: 1rem;
-        background: #f7fafc;
-        border-radius: 8px;
-        border-left: 4px solid #3182ce;
-        text-align: center;
+        margin: 1rem 0;
+        background: #f5f5f5;
+        font-family: monospace;
+        white-space: pre-wrap;
+        color: #222;
     }
-    
     /* Dark theme overrides */
     @media (prefers-color-scheme: dark) {
         .results-container {
-            background: #2d3748;
-            color: #e2e8f0;
-            border: 2px solid #4a5568;
+            background: #1e1e1e;
+            color: #f8f8f8;
+            border: 2px solid #333;
         }
-        
+        .border-default {
+            background: #2d2d2d;
+            border: 2px solid #444;
+        }
+        .border-content {
+            background: #2d2d2d;
+            border: 2px solid #4d90fe;
+        }
+        .border-analysis {
+            background: #2d2d2d;
+            border: 2px solid #ffb300;
+        }
+        .border-synthesis {
+            background: #2d2d2d;
+            border: 2px solid #00e676;
+        }
+        .border-title {
+            background: #1e1e1e;
+            color: #fff;
+            border-bottom: 2px solid #333;
+        }
+        .border-content .border-title {
+            background: #4d90fe;
+            border-bottom: 2px solid #4d90fe;
+        }
+        .border-analysis .border-title {
+            background: #ffb300;
+            color: #1e1e1e;
+            border-bottom: 2px solid #ffb300;
+        }
+        .border-synthesis .border-title {
+            background: #00e676;
+            color: #1e1e1e;
+            border-bottom: 2px solid #00e676.
+        }
         .highlight-text {
-            background-color: #d69e2e;
-            color: #1a202c;
+            background-color: #193c69 !important;
+            color: #78b0fd !important;
+            border: 1px solid #4d90fe;
         }
-        
-        .explain-text {
-            color: #63b3ed;
+        .explanation-text {
+            color: #ff7043 !important;
+            font-style: italic;
         }
-        
-        .result-header {
-            color: #63b3ed;
-            border-bottom: 2px solid #4a5568;
+        .logs-container {
+            border: 2px dashed #666;
+            background: #2d2d2d;
+            color: #fafafa;
         }
-        
-        .relevance-score {
-            background: #4299e1;
-        }
-        
-        .source-info {
-            color: #a0aec0;
-            border-top: 1px solid #4a5568;
-        }
-        
-        .direct-answer-container {
-            background: #1a202c;
-            border: 2px solid #48bb78;
-        }
-        
-        .direct-answer-header {
-            color: #68d391;
-        }
-        
-        .direct-answer-content {
-            color: #c6f6d5;
-        }
-        
-        .direct-answer-content h1, .direct-answer-content h2, .direct-answer-content h3, 
-        .direct-answer-content h4, .direct-answer-content h5, .direct-answer-content h6 {
-            color: #68d391;
-        }
-        
-        .direct-answer-content code {
-            background: #2d3748;
-            color: #68d391;
-        }
-        
-        .direct-answer-content pre {
-            background: #2d3748;
-        }
-        
-        .direct-answer-content blockquote {
-            border-left: 4px solid #48bb78;
-            color: #68d391;
-        }
-        
-        .direct-answer-content strong, .direct-answer-content b {
-            color: #68d391;
-        }
-        
-        .direct-answer-content em, .direct-answer-content i {
-            color: #68d391;
-        }
-        
-        .section-separator {
-            background: #4299e1;
-        }
-        
-        .detailed-analysis-header {
-            color: #63b3ed;
-            background: #1a202c;
-            border-left: 4px solid #4299e1;
-        }
-    }
-    
-    /* Gradio dark theme specific overrides */
-    [data-theme="dark"] .results-container {
-        background: #2d3748;
-        color: #e2e8f0;
-        border: 2px solid #4a5568;
-    }
-    
-    [data-theme="dark"] .highlight-text {
-        background-color: #d69e2e;
-        color: #1a202c;
-    }
-    
-    [data-theme="dark"] .explain-text {
-        color: #63b3ed;
-    }
-    
-    [data-theme="dark"] .result-header {
-        color: #63b3ed;
-        border-bottom: 2px solid #4a5568;
-    }
-    
-    [data-theme="dark"] .source-info {
-        color: #a0aec0;
-        border-top: 1px solid #4a5568;
-    }
-    
-    [data-theme="dark"] .direct-answer-container {
-        background: #1a202c;
-        border: 2px solid #48bb78;
-    }
-    
-    [data-theme="dark"] .direct-answer-header {
-        color: #68d391;
-    }
-    
-    [data-theme="dark"] .direct-answer-content {
-        color: #c6f6d5;
-    }
-    
-    [data-theme="dark"] .direct-answer-content h1, [data-theme="dark"] .direct-answer-content h2, 
-    [data-theme="dark"] .direct-answer-content h3, [data-theme="dark"] .direct-answer-content h4, 
-    [data-theme="dark"] .direct-answer-content h5, [data-theme="dark"] .direct-answer-content h6 {
-        color: #68d391;
-    }
-    
-    [data-theme="dark"] .direct-answer-content code {
-        background: #2d3748;
-        color: #68d391;
-    }
-    
-    [data-theme="dark"] .direct-answer-content pre {
-        background: #2d3748;
-    }
-    
-    [data-theme="dark"] .direct-answer-content blockquote {
-        border-left: 4px solid #48bb78;
-        color: #68d391;
-    }
-    
-    [data-theme="dark"] .direct-answer-content strong, [data-theme="dark"] .direct-answer-content b {
-        color: #68d391;
-    }
-    
-    [data-theme="dark"] .direct-answer-content em, [data-theme="dark"] .direct-answer-content i {
-        color: #68d391;
-    }
-    
-    [data-theme="dark"] .section-separator {
-        background: #4299e1;
-    }
-    
-    [data-theme="dark"] .detailed-analysis-header {
-        color: #63b3ed;
-        background: #1a202c;
-        border-left: 4px solid #4299e1;
     }
     </style>
     """
 
-def search_and_highlight(query: str, collection_names: str = "all") -> str:
-    """Main search function with markdown output"""
+def search_and_highlight(query: str, collection_names: str = "all"):
+    """
+    Main search function as a generator.
+    Yields a tuple: (direct_answer_md, html_results, synthesis_md, logs_html)
+    """
+    logs = []
+    direct_answer_md = ""
+    html_results = ""
+    synthesis_md = ""
+
+    def get_logs_html():
+        return f'<div class="logs-container"><div class="border-title">📜 Logs</div><pre>{"\n".join(logs)}</pre></div>'
+
+    # Start: update with initial log
+    logs.append(f"[search_and_highlight] Received query: '{query}' | collections: '{collection_names}'")
+    yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
+
     if not query.strip():
-        return "Please enter a search query."
-    
+        logs.append("[search_and_highlight] No query provided.")
+        yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
+        return
+
     try:
-        # Check if OpenAI embedding API is available
+        logs.append("[search_and_highlight] Testing OpenAI embeddings...")
+        yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
         if not test_openai_embeddings():
-            return "OpenAI embedding API not available. Please check OPENAI_API_KEY."
-        
-        # Get available collections
+            logs.append("[search_and_highlight] OpenAI embedding API not available.")
+            yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
+            return
+
+        logs.append("[search_and_highlight] Listing available collections...")
+        yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
         collections = list_available_collections()
         if not collections:
-            return "No collections found. Please run ingestion first."
-        
-        # Parse collection names
+            logs.append("[search_and_highlight] No collections found.")
+            yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
+            return
+
         available_book_names = [book_name for book_name, _ in collections]
         if collection_names.lower() == "all":
-            selected_pdf_name = None  # Search all collections
+            selected_pdf_name = None
+            logs.append("[search_and_highlight] Using all collections.")
         else:
-            # For simplicity, use the first valid collection name
             selected_names = [name.strip() for name in collection_names.split(",")]
             valid_names = [name for name in selected_names if name in available_book_names]
             selected_pdf_name = valid_names[0] if valid_names else None
-        
-        # Generate query embedding using OpenAI API
+            logs.append(f"[search_and_highlight] Selected collection: {selected_pdf_name}")
+        yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
+
+        logs.append("[search_and_highlight] Generating query embedding...")
+        yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
         query_embedding = generate_embeddings(query, normalize=True)
-        
-        # Perform search
+
+        logs.append("[search_and_highlight] Querying Chroma collections...")
+        yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
         all_results = query_chroma_collections(query_embedding, top_k=5, pdf_name=selected_pdf_name)
-        
         if not all_results:
-            return "No results found for your query."
-        
+            logs.append("[search_and_highlight] No results found for query.")
+            yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
+            return
+
         top_results = all_results[:5]
-        
-        # Create markdown results
-        markdown_results = []
-        
-        # PART 1: Direct Answer Section
+        html_sections = []
+
+        # PART 1: Direct Answer Section (Highly Emphasized Markdown with new CSS class)
         try:
+            logs.append("[search_and_highlight] Generating direct answer...")
+            yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
             direct_answer = generate_direct_answer(query, top_results)
-            markdown_results.append(f"## 🎯 Direct Answer\n\n{direct_answer}\n\n---\n")
+            direct_answer_md = f"""<div class="direct-answer-container">
+### 🎯 Direct Answer
+{direct_answer}
+</div>"""
         except Exception as e:
-            markdown_results.append(f"## 🎯 Direct Answer\n\nError generating direct answer: {str(e)}\n\n---\n")
-        
-        # PART 2: Detailed Analysis Section
-        markdown_results.append("## 🔍 Detailed Analysis & Search Results\n\n")
-        
-        # Get highlighted texts using query.py's highlighting functionality
+            logs.append(f"[search_and_highlight] Error generating direct answer: {e}")
+            direct_answer_md = f"""<div class="direct-answer-container">
+### 🎯 Direct Answer
+Error generating direct answer: {str(e)}
+</div>"""
+        yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
+
+        # PART 2: Detailed Analysis Section (HTML excluding synthesis)
+        html_sections.append('<div class="detailed-analysis-header">🔍 Detailed Analysis &amp; Search Results</div>')
         try:
+            logs.append("[search_and_highlight] Processing highlights for Gradio...")
+            yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
             processed_highlights = process_highlighting_for_gradio(query, top_results)
         except Exception as e:
-            # Fallback to original text if highlighting fails
+            logs.append(f"[search_and_highlight] Error in highlighting: {e}")
             processed_highlights = [(text, []) for _, _, text, _ in top_results]
-        
+        yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
+
         for i, (pdf_name, page_number, page_text, similarity) in enumerate(top_results, 1):
-            # Calculate relevance percentage  
-            relevance = max(0, min(100, int(similarity * 100)))
-            
-            # Get highlighted text and explanations
-            if i-1 < len(processed_highlights):
+            logs.append(f"[search_and_highlight] Processing result {i}: {pdf_name} page {page_number} (similarity {similarity:.4f})")
+            yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
+            if i - 1 < len(processed_highlights):
                 highlighted_text, explanations = processed_highlights[i-1]
             else:
                 highlighted_text, explanations = page_text, []
-            
-            # Create result with rich formatting
-            result_markdown = f"""
-{create_web_border(f"📄 {pdf_name} - Page {page_number} │ Similarity: {similarity:.4f} │ Rank {i}", "border-default")}
 
+            result_html = f"""
+{create_web_border(f"📄 {pdf_name} - Page {page_number} │ Similarity: {similarity:.4f} │ Rank {i}", "border-default")}
 {create_web_border("📖 CONTENT", "border-content")}
 {highlighted_text}
 {close_web_border()}
 """
-            
-            # Add explanations if any
             if explanations:
                 explanations_html = '<div class="explanations-list">'
                 for j, explanation in enumerate(explanations, 1):
                     explanations_html += f'<div class="explanation-item"><span class="explanation-number">[{j}]</span>{explanation}</div>'
                 explanations_html += '</div>'
-                
-                result_markdown += f"""
+                result_html += f"""
 {create_web_border("💡 RELEVANCE ANALYSIS", "border-analysis")}
 {explanations_html}
 {close_web_border()}
 """
-            
-            # Add individual LLM analysis
             try:
+                logs.append(f"[search_and_highlight] Analyzing individual result {i}...")
+                yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
                 individual_analysis = analyze_individual_result_web(query, page_text, pdf_name, page_number, similarity)
-                result_markdown += f"""
+                result_html += f"""
 {create_web_border("🧠 LLM ANALYSIS", "border-analysis")}
 <div class="individual-analysis">{individual_analysis}</div>
 {close_web_border()}
 """
             except Exception as e:
-                result_markdown += f"""
+                logs.append(f"[search_and_highlight] Error in individual analysis for result {i}: {e}")
+                result_html += f"""
 {create_web_border("🧠 LLM ANALYSIS", "border-analysis")}
 <div class="individual-analysis">Error generating analysis: {str(e)}</div>
 {close_web_border()}
 """
-            
-            result_markdown += f"{close_web_border()}\n\n---\n\n"
-            markdown_results.append(result_markdown)
-        
-        # Add comprehensive synthesis
-        try:
-            synthesis = synthesize_results_web(query, top_results)
-            synthesis_section = f"""
-{create_web_border("🔬 COMPREHENSIVE SYNTHESIS", "border-synthesis")}
-<div class="synthesis-content">{synthesis}</div>
-{close_web_border()}
+            result_html += f"{close_web_border()}<div class='section-separator'></div>"
+            html_sections.append(result_html)
+            yield (direct_answer_md, "".join(html_sections), synthesis_md, get_logs_html())
 
----
-"""
-            markdown_results.append(synthesis_section)
+        # PART 3: Comprehensive Synthesis as Dedicated Markdown Field
+        try:
+            logs.append("[search_and_highlight] Synthesizing results...")
+            yield (direct_answer_md, "".join(html_sections), synthesis_md, get_logs_html())
+            synthesis = synthesize_results_web(query, top_results)
+            synthesis_md = f"### 🔬 Comprehensive Synthesis\n\n{synthesis}"
         except Exception as e:
-            markdown_results.append(f"**Synthesis Error:** {str(e)}\n\n---\n\n")
-        
-        # Add summary stats
-        best_result = top_results[0] if top_results else None
-        worst_result = top_results[-1] if top_results else None
-        summary_info = f"📊 **Total results:** {len(all_results)}"
-        if best_result and worst_result:
-            summary_info += f" | **Best:** {best_result[0]} Page {best_result[1]} ({best_result[3]:.4f}) | **Worst:** {worst_result[0]} Page {worst_result[1]} ({worst_result[3]:.4f})"
-        markdown_results.append(f"\n{summary_info}\n")
-        
-        # Return clean markdown results without CSS (CSS is handled by Gradio's css parameter)
-        final_result = "".join(markdown_results)
-        
-        return final_result
-        
+            logs.append(f"[search_and_highlight] Error in synthesis: {e}")
+            synthesis_md = f"### 🔬 Comprehensive Synthesis\n\nError: {str(e)}"
+        yield (direct_answer_md, "".join(html_sections), synthesis_md, get_logs_html())
+
+        summary_info = f"📊 <b>Total results:</b> {len(all_results)}"
+        if top_results:
+            best_result, worst_result = top_results[0], top_results[-1]
+            summary_info += f" | <b>Best:</b> {best_result[0]} Page {best_result[1]} ({best_result[3]:.4f}) | <b>Worst:</b> {worst_result[0]} Page {worst_result[1]} ({worst_result[3]:.4f})"
+        html_sections.append(f"<div style='margin:1em 0'>{summary_info}</div>")
+        html_results = "".join(html_sections)
+        yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
+
+        logs.append("[search_and_highlight] Done. Returning results.")
+        yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
+
     except Exception as e:
-        return f"Error: {str(e)}"
+        logs.append(f"[search_and_highlight] Fatal error: {e}")
+        yield ("", f"<div>Error: {str(e)}</div>", "", get_logs_html())
+
 
 def create_interface():
     """Create the Gradio interface"""
-    
+
     with gr.Blocks(
         title="🔍 LLM RAG Advanced Search",
         theme=gr.themes.Default(),
@@ -731,9 +472,9 @@ def create_interface():
         .search-box {
             font-size: 16px !important;
         }
-        """
+        """ + create_custom_css()
     ) as interface:
-        
+
         gr.HTML("""
         <div style="text-align: center; padding: 2rem; background: linear-gradient(135deg, #4a5568 0%, #2d3748 100%); border-radius: 15px; margin-bottom: 2rem;">
             <h1 style="color: white; margin: 0; font-size: 2.5em;">🔍 LLM RAG Advanced Search</h1>
@@ -742,7 +483,7 @@ def create_interface():
             </p>
         </div>
         """)
-        
+
         with gr.Row():
             with gr.Column(scale=3):
                 query_input = gr.Textbox(
@@ -756,40 +497,51 @@ def create_interface():
                     value="all",
                     placeholder="all or comma-separated names"
                 )
-        
+
         search_button = gr.Button("🚀 Search", variant="primary", size="lg")
-        
-        results_output = gr.Markdown(
-            label="Search Results",
+
+        # Outputs: direct answer (Markdown), detailed analysis (HTML), comprehensive synthesis (Markdown), logs (HTML)
+        direct_answer_output = gr.Markdown(
+            label="Direct Answer",
             value="Enter a query and click search to see results."
         )
-        
-        # Set up the search functionality
+        results_output = gr.HTML(
+            label="Detailed Analysis",
+            value=""
+        )
+        synthesis_output = gr.Markdown(
+            label="Comprehensive Synthesis",
+            value="Synthesis will appear here..."
+        )
+        logs_output = gr.HTML(
+            label="Logs",
+            value="<div>No logs yet.</div>"
+        )
+
         search_button.click(
             fn=search_and_highlight,
             inputs=[query_input, collections_input],
-            outputs=results_output,
-            show_progress=True
+            outputs=[direct_answer_output, results_output, synthesis_output, logs_output],
+            show_progress=True  # removed stream=True
         )
-        
-        # Also trigger search on Enter key
+
         query_input.submit(
             fn=search_and_highlight,
             inputs=[query_input, collections_input],
-            outputs=results_output,
-            show_progress=True
+            outputs=[direct_answer_output, results_output, synthesis_output, logs_output],
+            show_progress=True  # removed stream=True
         )
-        
+
         gr.HTML("""
         <div style="text-align: center; margin-top: 2rem; padding: 1rem;">
             <h3 style="color: var(--body-text-color, #666);">🎨 Highlighting Legend</h3>
             <div style="display: flex; justify-content: center; flex-wrap: wrap; gap: 1rem;">
                 <span style="background: #fbbf24; padding: 4px 8px; border-radius: 4px; color: #1a202c; font-weight: 600;">Highlighted Text</span>
-                <span style="color: #3182ce; font-style: italic;">[Explanations in italics]</span>
+                <span style="color: #3182ce; font-style: italic;">Explanations in italics</span>
             </div>
         </div>
         """)
-    
+
     return interface
 
 if __name__ == "__main__":
