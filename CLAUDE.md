@@ -111,21 +111,25 @@ llmrag/
 - Configurable similarity thresholds
 - Visual result formatting with borders and footnotes
 
-### 4. gradio_browser.py - Web Interface
-**Purpose**: Interactive web-based document search
+### 4. gradio_browser.py - Enhanced Web Interface
+**Purpose**: Feature-rich web-based document search matching terminal functionality
 
 **Key Functions**:
-- `search_and_highlight()` - Main search function
-- `process_enhanced_highlighting()` - Advanced multi-color highlighting
-- `create_custom_css()` - Sophisticated styling
-- `create_interface()` - Gradio UI setup
+- `search_and_highlight()` - Main search function with rich formatting
+- `process_highlighted_text_for_html()` - HTML conversion with footnote extraction
+- `analyze_individual_result_web()` - Per-result LLM analysis
+- `synthesize_results_web()` - Cross-result synthesis and insights
+- `create_web_border()` - Professional bordered sections
+- `create_custom_css()` - Comprehensive styling with dark/light themes
 
 **Features**:
-- Real-time search interface
-- Multi-level highlighting system (PRIMARY, SECONDARY, WEAK, CONTEXT)
-- Collection filtering
-- Responsive CSS design
-- Interactive result display
+- **Rich Text Display**: Semantic highlighting with footnoted explanations
+- **Multi-Level Analysis**: Content → Relevance Analysis → LLM Analysis → Synthesis
+- **Professional Styling**: Color-coded bordered sections matching terminal aesthetics
+- **Dual Answer Mode**: Direct answers + detailed search analysis
+- **Responsive Design**: Dark/light theme support with proper CSS
+- **Multilingual Intelligence**: Native language explanations
+- **Interactive Interface**: Real-time search with collection filtering
 
 ### 5. info.py - Database Utilities
 **Purpose**: Database management and statistics
@@ -162,11 +166,21 @@ llmrag/
 - **Merge Logic**: Combines very short final chunks
 - **Metadata**: Tracks chunk relationships and source pages
 
-### Multi-Level Highlighting System
-- **PRIMARY** (Yellow): Direct matches, exact keywords
-- **SECONDARY** (Orange): Strong conceptual connections
-- **WEAK** (Light Blue): Contextual or tenuous links
-- **CONTEXT** (Light Green): Supporting information
+### Rich Text Highlighting System
+
+**Terminal Interface (query.py)**:
+- **Yellow Background**: Semantically relevant text sections
+- **Green Text**: Detailed explanations of semantic connections
+- **Bordered Sections**: Unicode box-drawing characters for visual structure
+- **Footnoted Analysis**: Numbered explanations with comprehensive insights
+- **Multi-Section Display**: Content → Relevance → LLM Analysis → Synthesis
+
+**Web Interface (gradio_browser.py)**:
+- **Yellow Highlights**: Semantic annotations with footnote numbers
+- **Explanation Cards**: Dedicated sections for numbered explanations
+- **Professional Borders**: CSS-styled sections with color coding
+- **Multi-Level Analysis**: Matching terminal functionality in web format
+- **Responsive Design**: Dark/light theme support with proper styling
 
 ### Multilingual Intelligence
 - **Detection**: Automatic language identification
@@ -259,11 +273,17 @@ python test_chunking.py
 ## Current Status: ✅ PRODUCTION READY
 
 The system is now completely clean of legacy code and ready for production use with:
-- Modern OpenAI-based embedding architecture
-- Clean, well-documented codebase
-- Comprehensive error handling
-- Multi-interface access (CLI + Web)
-- Full multilingual support
-- Advanced semantic search capabilities
+- **Modern OpenAI-based embedding architecture**: High-quality text-embedding-3-large
+- **Clean, well-documented codebase**: Comprehensive function documentation and type hints
+- **Comprehensive error handling**: Robust API integration with fallback mechanisms
+- **Enhanced Multi-interface access**: 
+  - **CLI**: Rich terminal interface with Unicode borders and ANSI colors
+  - **Web**: Professional Gradio interface with advanced CSS styling
+- **Full multilingual support**: Native language explanations (Italian, Spanish, French, English)
+- **Advanced semantic search capabilities**: LLM-powered highlighting and analysis
+- **Rich Text Processing**: Footnoted explanations and multi-level analysis sections
+- **Professional Presentation**: Color-coded sections and responsive design
+
+**Recent Enhancement**: Web interface now matches the sophistication of the terminal interface with rich highlighting, multi-level analysis, and professional styling.
 
 All legacy llama.cpp dependencies have been removed and the system now relies entirely on cloud APIs for maximum reliability and performance.

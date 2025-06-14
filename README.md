@@ -117,11 +117,17 @@ python gradio_browser.py
 
 Access at: http://localhost:7860
 
-Features:
-- Interactive search interface
-- Multi-color highlighting system
-- Real-time relevance analysis
-- Collection filtering
+**Enhanced Features**:
+- **Interactive Search Interface**: Real-time document search with collection filtering
+- **Rich Text Highlighting**: Advanced semantic highlighting with footnoted explanations
+- **Multi-Level Analysis**: Each result includes:
+  - 📖 **Content**: Highlighted text with semantic annotations
+  - 💡 **Relevance Analysis**: Numbered explanations for each highlight
+  - 🧠 **LLM Analysis**: AI-powered relevance assessment
+  - 🔬 **Comprehensive Synthesis**: Cross-result analysis and insights
+- **Dual Answer Mode**: Direct answers + detailed search result analysis
+- **Responsive Design**: Dark/light theme support with professional styling
+- **Multilingual Support**: Native language explanations (Italian, Spanish, French, English)
 
 ### 4. Database Information
 
@@ -153,10 +159,12 @@ python info.py
    - Comprehensive error handling
    - Text preprocessing and normalization
 
-4. **gradio_browser.py**: Web interface
-   - Interactive document search
-   - Advanced highlighting with CSS
-   - User-friendly result display
+4. **gradio_browser.py**: Enhanced web interface
+   - Interactive document search with real-time results
+   - Rich semantic highlighting with footnoted explanations
+   - Multi-level analysis sections (Content, Relevance, LLM Analysis, Synthesis)
+   - Professional CSS styling with dark/light theme support
+   - Comprehensive result display matching terminal functionality
 
 5. **info.py**: Database utilities
    - Collection statistics
@@ -199,12 +207,19 @@ llmrag/
 
 ### Advanced Highlighting
 
-The system provides sophisticated text highlighting with multiple levels:
+The system provides sophisticated text highlighting with explanations:
 
-- **PRIMARY** (Yellow): Direct matches or highly relevant content
-- **SECONDARY** (Orange): Strong conceptual connections
-- **WEAK** (Light Blue): Contextual or tenuous links
-- **CONTEXT** (Light Green): Important supporting information
+**Terminal (query.py)**:
+- **Yellow Background**: Semantically relevant text sections
+- **Green Text**: Detailed explanations of relevance
+- **Structured Sections**: Bordered content areas with emoji headers
+- **Footnoted Explanations**: Numbered references with detailed analysis
+
+**Web Interface (gradio_browser.py)**:
+- **Yellow Highlights**: Semantically relevant text with footnote numbers
+- **Explanation Cards**: Numbered explanations in dedicated sections
+- **Multi-Level Analysis**: Content → Relevance → LLM Analysis → Synthesis
+- **Professional Styling**: Color-coded sections with responsive design
 
 ### Multilingual Support
 
