@@ -141,7 +141,8 @@ def process_highlighting_for_gradio(query: str, results: List[Tuple[str, int, st
     
     # Get raw highlighted texts with [HIGHLIGHT] tags (reuse from query.py)
     try:
-        highlighted_texts = highlight_relevant_text_batch(query, results)
+        # Request raw tags, not ANSI codes
+        highlighted_texts = highlight_relevant_text_batch(query, results, output_format_ansi=False)
     except Exception as e:
         # Fallback to original texts
         highlighted_texts = [text_content for _, _, text_content, _ in results]

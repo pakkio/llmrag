@@ -143,7 +143,7 @@ Respond with only one word: the language name (e.g., "Italian", "English", "Fren
         return language.strip().lower()
     return "english"  # fallback
 
-def highlight_relevant_text_batch(query: str, results: List[Tuple[str, int, str, float]]) -> List[str]:
+def highlight_relevant_text_batch(query: str, results: List[Tuple[str, int, str, float]], output_format_ansi: bool = True) -> List[str]:
     """Use LLM to batch highlight relevant parts of multiple texts and explain relevance"""
     if not results:
         return []
@@ -216,7 +216,7 @@ Rules:
     
     if not success:
         # Fallback to individual highlighting
-        return [highlight_relevant_text(query, text_content) for _, _, text_content, _ in results]
+        return [highlight_relevant_text(query, text_content, output_format_ansi=output_format_ansi) for _, _, text_content, _ in results]
     
     # Parse the batch response to extract individual highlighted texts
     highlighted_texts = []
@@ -230,11 +230,12 @@ Rules:
             if content.startswith('---'):
                 content = '\n'.join(content.split('\n')[1:]).strip()
             
-            # Apply color formatting
-            content = content.replace('[HIGHLIGHT]', '\033[43m\033[30m')  # Yellow background, black text
-            content = content.replace('[/HIGHLIGHT]', '\033[0m')  # Reset color
-            content = content.replace('[EXPLAIN]', '\033[32m')  # Green text
-            content = content.replace('[/EXPLAIN]', '\033[0m')  # Reset color
+            if output_format_ansi:
+                # Apply color formatting
+                content = content.replace('[HIGHLIGHT]', '\033[43m\033[30m')  # Yellow background, black text
+                content = content.replace('[/HIGHLIGHT]', '\033[0m')  # Reset color
+                content = content.replace('[EXPLAIN]', '\033[32m')  # Green text
+                content = content.replace('[/EXPLAIN]', '\033[0m')  # Reset color
             
             highlighted_texts.append(content)
         else:
@@ -244,11 +245,11 @@ Rules:
     # Ensure we have the right number of results
     while len(highlighted_texts) < len(results):
         idx = len(highlighted_texts)
-        highlighted_texts.append(highlight_relevant_text(query, results[idx][2]))
+        highlighted_texts.append(highlight_relevant_text(query, results[idx][2], output_format_ansi=output_format_ansi))
     
     return highlighted_texts[:len(results)]
 
-def highlight_relevant_text(query: str, page_text: str) -> str:
+def highlight_relevant_text(query: str, page_text: str, output_format_ansi: bool = True) -> str:
     """Use LLM to find and highlight relevant parts of the text and explain relevance (single text version)"""
     # Detect the language of the page text
     detected_language = detect_language(page_text)
@@ -311,13 +312,14 @@ Rules:
     if not success:
         return page_text
     
-    # Replace highlight tags with ANSI color codes for yellow background
-    highlighted_text = highlighted_text.replace('[HIGHLIGHT]', '\033[43m\033[30m')  # Yellow background, black text
-    highlighted_text = highlighted_text.replace('[/HIGHLIGHT]', '\033[0m')  # Reset color
-    
-    # Replace explanation tags with green color
-    highlighted_text = highlighted_text.replace('[EXPLAIN]', '\033[32m')  # Green text
-    highlighted_text = highlighted_text.replace('[/EXPLAIN]', '\033[0m')  # Reset color
+    if output_format_ansi:
+        # Replace highlight tags with ANSI color codes for yellow background
+        highlighted_text = highlighted_text.replace('[HIGHLIGHT]', '\033[43m\033[30m')  # Yellow background, black text
+        highlighted_text = highlighted_text.replace('[/HIGHLIGHT]', '\033[0m')  # Reset color
+
+        # Replace explanation tags with green color
+        highlighted_text = highlighted_text.replace('[EXPLAIN]', '\033[32m')  # Green text
+        highlighted_text = highlighted_text.replace('[/EXPLAIN]', '\033[0m')  # Reset color
     
     return highlighted_text
 
@@ -578,11 +580,12 @@ def display_results(similarities: List[Tuple[str, int, str, float]],
     if show_text:
         try:
             # Use batch highlighting for better performance
-            highlighted_texts = highlight_relevant_text_batch(query, displayed_results)
+            # For terminal output, ANSI is desired.
+            highlighted_texts = highlight_relevant_text_batch(query, displayed_results, output_format_ansi=True)
         except Exception as e:
             print(f"Error in batch highlighting, falling back to individual processing: {e}")
             # Fallback to individual highlighting
-            highlighted_texts = [highlight_relevant_text(query, text_content) for _, _, text_content, _ in displayed_results]
+            highlighted_texts = [highlight_relevant_text(query, text_content, output_format_ansi=True) for _, _, text_content, _ in displayed_results]
     
     # Display individual results with analysis
     for i, (pdf_name, page_number, text_content, similarity) in enumerate(displayed_results):
