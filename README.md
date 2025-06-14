@@ -117,6 +117,11 @@ python gradio_browser.py
 
 Access at: http://localhost:7860
 
+**Port Management**: If port 7860 is occupied, use the utility script:
+```bash
+./kill_port_7860.sh
+```
+
 **Enhanced Features**:
 - **Interactive Search Interface**: Real-time document search with collection filtering
 - **Rich Text Highlighting**: Advanced semantic highlighting with footnoted explanations
@@ -193,6 +198,7 @@ llmrag/
 ├── pyproject.toml              # Project dependencies
 ├── .env.example                # Environment configuration template
 ├── .env                        # Environment configuration (create from .env.example)
+├── kill_port_7860.sh           # Utility to free port 7860 (kill processes)
 └── chroma_db/                  # ChromaDB vector database (auto-created)
 ```
 

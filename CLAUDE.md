@@ -35,6 +35,7 @@ llmrag/
 ├── pyproject.toml              # Project dependencies
 ├── .env.example                # Environment configuration template
 ├── .env                        # Environment configuration
+├── kill_port_7860.sh           # Port management utility script
 ├── CLAUDE.md                   # This file - project documentation
 ├── README.md                   # User documentation
 └── chroma_db/                  # ChromaDB vector database (auto-created)
@@ -140,6 +141,22 @@ llmrag/
 - Storage usage information
 - Collection management tools
 
+### 6. kill_port_7860.sh - Port Management Utility
+**Purpose**: Automated port management for web interface
+
+**Key Functions**:
+- `lsof -ti :7860` - Find processes using port 7860
+- `kill -TERM` - Graceful process termination
+- `kill -KILL` - Forced termination if needed
+- Process verification and status reporting
+
+**Features**:
+- **Smart Termination**: Tries graceful SIGTERM first, then SIGKILL if needed
+- **Process Details**: Shows PID and command details before termination
+- **Verification**: Confirms port is actually freed after termination
+- **Error Handling**: Reports success/failure status
+- **Safety**: Uses lsof to precisely target port-specific processes
+
 ## Text Processing Pipeline
 
 ### 1. Document Ingestion
@@ -226,6 +243,9 @@ python query.py --list
 
 # Web interface
 python gradio_browser.py
+
+# Port management (if port 7860 is occupied)
+./kill_port_7860.sh
 
 # Database info
 python info.py
