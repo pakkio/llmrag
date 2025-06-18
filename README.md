@@ -4,12 +4,32 @@ A powerful Retrieval-Augmented Generation (RAG) system that processes PDF docume
 
 ## Features
 
-- **PDF Text Extraction**: Extract text content from PDF documents with smart chunking
-- **OpenAI Embeddings**: High-quality embeddings using text-embedding-3-large
-- **Intelligent Querying**: Search documents using semantic similarity
-- **Multi-language Support**: Automatic language detection with native language explanations
-- **Visual Results**: Highlighted relevant text with color-coded explanations
-- **Web Interface**: Gradio-based browser for interactive document search
+### **🔍 Advanced Search System**
+- **Hybrid Search**: Intelligent combination of semantic + keyword search (default: 60%/40%)
+- **Semantic Search**: OpenAI embeddings using text-embedding-3-large for conceptual understanding
+- **Keyword Search**: SQLite FTS5 with BM25-style ranking for exact term matching
+- **Configurable Weights**: Customize semantic/keyword balance for optimal results
+- **Query Enhancement**: AI-powered translation and expansion of search terms for better results
+
+### **🌐 Multilingual Intelligence**
+- **Auto-Detection**: Intelligent language identification from document content
+- **Manual Override**: Force specific language responses (Italian, Spanish, French, English)
+- **Native Explanations**: Contextual analysis in the document's natural language
+
+### **💻 Dual Interface Options**
+| Feature | CLI (query.py) | Web (gradio_browser.py) |
+|---------|----------------|------------------------|
+| Search Methods | ✅ `--hybrid`, `--semantic`, `--bm25` | ✅ Interactive dropdown |
+| Weight Control | ✅ `--semantic-weight`, `--keyword-weight` | ✅ Auto-normalizing sliders |
+| Language Control | ✅ `--language italian` | ✅ Language dropdown |
+| Real-time Feedback | ✅ Verbose logging | ✅ Live progress + logs |
+| Visual Highlighting | ✅ ANSI colors | ✅ Rich HTML styling |
+
+### **📊 Rich Result Analysis**
+- **Smart Highlighting**: AI-powered semantic text highlighting with explanations
+- **Multi-Level Analysis**: Content → Relevance → LLM Analysis → Synthesis
+- **Dual Answer Mode**: Direct answers + detailed search breakdowns
+- **Professional Styling**: Color-coded sections with responsive design
 
 ## Installation
 
@@ -70,41 +90,77 @@ python ingest.py path/to/your/document.pdf
 - `--to-page N`: End at page N
 
 **Output**:
-- Text and embeddings stored in ChromaDB collection: `pdf_{pdf_name}`
-- Database location: `./chroma_db/`
+- Semantic embeddings stored in ChromaDB collection: `pdf_{pdf_name}`
+- Keyword index stored in SQLite FTS5 database: `./hybrid_search.db`
+- Vector database location: `./chroma_db/`
 
 ### 2. Querying Documents
 
-Search processed documents using semantic queries:
+Search processed documents using hybrid, semantic, or keyword search:
 
 ```bash
 python query.py "your search query"
 ```
 
-**Options**:
+**Search Mode Options**:
+- `--hybrid`: Hybrid search combining semantic + keyword (default, 60% semantic + 40% keyword)
+- `--semantic`: Semantic search only (ChromaDB embeddings)
+- `--bm25`: Keyword search only (SQLite FTS5 BM25)
+- `--semantic-weight FLOAT`: Weight for semantic search in hybrid mode (default: 0.6)
+- `--keyword-weight FLOAT`: Weight for keyword search in hybrid mode (default: 0.4)
+
+**General Options**:
 - `--pdf PDF_NAME`: Search specific PDF (default: all)
 - `-k, --top-k N`: Number of results to show (default: 3)
 - `-s, --min-similarity FLOAT`: Minimum similarity threshold (default: 0.0)
+- `--language LANG`: Force response language (italian, spanish, french, english, default: auto-detect)
+- `--no-enhancement`: Disable intelligent query enhancement (translation and expansion, enabled by default)
 - `--no-text`: Hide text content
+- `--no-analysis`: Disable LLM analysis
 - `--list`: List available PDF collections
 - `-v, --verbose`: Enable verbose logging
 
 **Examples**:
 ```bash
-# Basic search across all documents
+# Default hybrid search (60% semantic + 40% keyword)
 python query.py "pricing strategies"
 
+# Semantic search only (concepts and context)
+python query.py "market analysis" --semantic
+
+# Keyword search only (exact terms and phrases)
+python query.py "machine learning" --bm25
+
+# Custom hybrid weighting (80% semantic, 20% keyword)
+python query.py "artificial intelligence" --semantic-weight 0.8 --keyword-weight 0.2
+
 # Search specific document with 5 results
-python query.py "market analysis" --pdf business_plan -k 5
+python query.py "competitive advantage" --pdf business_plan -k 5
 
 # Filter by similarity threshold
-python query.py "competitive advantage" -s 0.3
+python query.py "pricing models" -s 0.3
 
 # List available documents
 python query.py --list
 
-# Complex theological query
-python query.py "What can we learn from David's relationship with God?"
+# Keyword search for exact terminology
+python query.py "REST API endpoint" --bm25
+
+# Semantic search for conceptual understanding
+python query.py "What can we learn from David's relationship with God?" --semantic
+
+# Force Italian language responses
+python query.py "strategie di marketing" --language italian
+
+# Force English responses for multilingual documents
+python query.py "análisis de mercado" --language english
+
+# Query enhancement examples (automatic translation and expansion)
+python query.py "Nettuno" --bm25  # → Enhanced to "Neptune planet eighth planet"
+python query.py "strategie di marketing" --hybrid  # → Enhanced to include "marketing strategies business promotional"
+
+# Disable query enhancement for exact term matching
+python query.py "machine learning" --bm25 --no-enhancement
 ```
 
 ### 3. Web Interface
@@ -122,8 +178,17 @@ Access at: http://localhost:7860
 ./kill_port_7860.sh
 ```
 
-**Enhanced Features**:
-- **Interactive Search Interface**: Real-time document search with collection filtering
+**Enhanced Web Interface Features**:
+
+### **🔧 Search Configuration**
+- **🔍 Search Method Selection**: Dropdown for Hybrid/Semantic/BM25 search modes
+- **⚖️ Hybrid Weight Control**: Interactive sliders for semantic/keyword balance (auto-normalizing to 1.0)
+- **🌐 Language Selection**: Dropdown for Auto-detect/English/Italian/Spanish/French
+- **📚 Collection Filtering**: Text input for specific document collections
+- **🎯 Smart UI**: Sliders only visible when Hybrid mode is selected
+
+### **📊 Advanced Search Features**
+- **Interactive Search Interface**: Real-time document search with full CLI feature parity
 - **Rich Text Highlighting**: Advanced semantic highlighting with footnoted explanations
 - **Multi-Level Analysis**: Each result includes:
   - 📖 **Content**: Highlighted text with semantic annotations
@@ -132,7 +197,7 @@ Access at: http://localhost:7860
   - 🔬 **Comprehensive Synthesis**: Cross-result analysis and insights
 - **Dual Answer Mode**: Direct answers + detailed search result analysis
 - **Responsive Design**: Dark/light theme support with professional styling
-- **Multilingual Support**: Native language explanations (Italian, Spanish, French, English)
+- **Live Feedback**: Real-time logs showing search method, weights, and progress
 
 ### 4. Database Information
 
@@ -165,11 +230,12 @@ python info.py
    - Text preprocessing and normalization
 
 4. **gradio_browser.py**: Enhanced web interface
-   - Interactive document search with real-time results
-   - Rich semantic highlighting with footnoted explanations
-   - Multi-level analysis sections (Content, Relevance, LLM Analysis, Synthesis)
-   - Professional CSS styling with dark/light theme support
-   - Comprehensive result display matching terminal functionality
+   - **Search Method Control**: Full dropdown support for Hybrid/Semantic/BM25 modes
+   - **Interactive Weight Tuning**: Real-time sliders for hybrid search balance (auto-normalizing)
+   - **Language Selection**: Dropdown for forced language responses
+   - **Rich semantic highlighting**: Footnoted explanations with multi-level analysis
+   - **Professional UI**: Smart controls with conditional visibility and live feedback
+   - **Full CLI Parity**: All command-line features available in web interface
 
 5. **info.py**: Database utilities
    - Collection statistics
@@ -177,8 +243,9 @@ python info.py
 
 ### Technology Stack
 
-- **Embeddings**: OpenAI text-embedding-3-large (3072 dimensions)
-- **Vector Database**: ChromaDB with persistent storage
+- **Semantic Search**: OpenAI text-embedding-3-large (3072 dimensions) with ChromaDB
+- **Keyword Search**: SQLite FTS5 with BM25 ranking and Porter stemming
+- **Hybrid Search**: Intelligent combination with configurable weighting
 - **LLM**: Configurable via OpenRouter (default: Claude 3 Haiku)
 - **PDF Processing**: PyMuPDF for text extraction
 - **Web Interface**: Gradio for interactive search
@@ -188,8 +255,9 @@ python info.py
 
 ```
 llmrag/
-├── ingest.py                    # PDF processing and embedding generation
-├── query.py                     # Semantic search and result display
+├── ingest.py                    # PDF processing and dual-database ingestion
+├── query.py                     # Hybrid/semantic/keyword search engine
+├── sqlite_fts5.py              # SQLite FTS5 keyword search manager
 ├── llm_wrapper.py              # API integration (OpenAI + OpenRouter)
 ├── gradio_browser.py           # Web interface for document browsing
 ├── info.py                     # Database information and utilities
@@ -199,7 +267,8 @@ llmrag/
 ├── .env.example                # Environment configuration template
 ├── .env                        # Environment configuration (create from .env.example)
 ├── kill_port_7860.sh           # Utility to free port 7860 (kill processes)
-└── chroma_db/                  # ChromaDB vector database (auto-created)
+├── chroma_db/                  # ChromaDB vector database (auto-created)
+└── hybrid_search.db            # SQLite FTS5 keyword database (auto-created)
 ```
 
 ## Features in Detail
@@ -229,11 +298,59 @@ The system provides sophisticated text highlighting with explanations:
 
 ### Multilingual Support
 
-Automatic language detection with native explanations:
+**Automatic Detection + Manual Override**:
+- **Auto-Detection**: Intelligent language identification from document content
+- **Manual Override**: Force specific language via `--language` (CLI) or dropdown (Web)
+
+**Supported Languages**:
 - **Italian**: Spiegazioni in italiano naturale
 - **Spanish**: Explicaciones en español natural  
 - **French**: Explications en français naturel
 - **English**: Natural English explanations
+
+**Usage Examples**:
+```bash
+# Auto-detect language from document
+python query.py "strategia aziendale"  # → Italian responses
+
+# Force specific language
+python query.py "business strategy" --language italian  # → Italian responses
+python query.py "estrategia empresarial" --language english  # → English responses
+```
+
+### Intelligent Query Enhancement
+
+**Automatic Translation + Term Expansion**:
+The system automatically enhances search queries using LLM analysis to improve search results:
+
+**Translation Process**:
+- **Language Detection**: Automatically identifies non-English queries
+- **Translation**: Converts to English for document matching
+- **Synonym Addition**: Adds relevant synonyms and related terms
+- **Context Expansion**: Includes conceptually related terminology
+
+**Enhancement Examples**:
+```bash
+# Italian → English with expansion
+"Nettuno" → "Neptune planet eighth planet"
+
+# Spanish business term → English expansion  
+"estrategias de marketing" → "marketing strategies business promotional tactics"
+
+# Technical term expansion
+"machine learning" → "artificial intelligence AI neural networks algorithms"
+```
+
+**Benefits**:
+- **Cross-Language Search**: Find English documents using non-English queries
+- **Better Recall**: Enhanced terms find more relevant results
+- **Domain Awareness**: Adds field-specific terminology automatically
+- **Fallback Protection**: Original query used if enhancement fails
+
+**Control Options**:
+- **Default**: Enhancement enabled for better results
+- **Disable**: Use `--no-enhancement` for exact term matching
+- **Semantic Mode**: Enhancement doesn't affect semantic search (embeddings handle similarity automatically)
 
 ### Similarity Scoring
 

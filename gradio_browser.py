@@ -15,8 +15,9 @@ import markdown
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from query import (
-    list_available_collections, query_chroma_collections,
-    highlight_relevant_text_batch, detect_language, generate_direct_answer
+    list_available_collections, query_chroma_collections, query_fts5_collections, hybrid_search,
+    highlight_relevant_text_batch, detect_language, generate_direct_answer, generate_query_embedding,
+    enhance_query
 )
 from llm_wrapper import llm_call, generate_embeddings, test_openai_embeddings
 
@@ -40,9 +41,12 @@ def process_highlighted_text_for_html(highlighted_text: str) -> Tuple[str, List[
     
     return clean_text, []  # Explanations are now inline, no separate list needed
 
-def analyze_individual_result_web(query: str, text_content: str, pdf_name: str, page_number: int, similarity: float) -> str:
+def analyze_individual_result_web(query: str, text_content: str, pdf_name: str, page_number: int, similarity: float, force_language: str = None) -> str:
     """Generate individual result analysis for web display (from query.py)"""
-    detected_language = detect_language(text_content)
+    if force_language:
+        detected_language = force_language.lower()
+    else:
+        detected_language = detect_language(text_content)
     
     if detected_language == "italian":
         language_instruction = "Rispondi in italiano."
@@ -77,12 +81,15 @@ Provide a concise analysis (2-3 sentences) focusing on relevance and research va
         return analysis.strip()
     return "Analysis not available for this result."
 
-def synthesize_results_web(query: str, results: List[Tuple[str, int, str, float]]) -> str:
+def synthesize_results_web(query: str, results: List[Tuple[str, int, str, float]], force_language: str = None) -> str:
     """Generate comprehensive synthesis for web display (from query.py)"""
     if not results:
         return "No results to synthesize."
     
-    detected_language = detect_language(results[0][2])
+    if force_language:
+        detected_language = force_language.lower()
+    else:
+        detected_language = detect_language(results[0][2])
     
     if detected_language == "italian":
         language_instruction = "Rispondi in italiano con un'analisi strutturata."
@@ -127,7 +134,7 @@ Use [[...]] to highlight any inferred information or assumptions, and format the
     return "Synthesis unavailable for these results."
 
 
-def process_highlighting_for_gradio(query: str, results: List[Tuple[str, int, str, float]]) -> List[Tuple[str, List[str]]]:
+def process_highlighting_for_gradio(query: str, results: List[Tuple[str, int, str, float]], force_language: str = None) -> List[Tuple[str, List[str]]]:
     """Use query.py's highlighting and convert to HTML for gradio"""
     if not results:
         return []
@@ -135,7 +142,7 @@ def process_highlighting_for_gradio(query: str, results: List[Tuple[str, int, st
     # Get raw highlighted texts with [HIGHLIGHT] tags (reuse from query.py)
     try:
         # Request raw tags, not ANSI codes
-        highlighted_texts = highlight_relevant_text_batch(query, results, output_format_ansi=False)
+        highlighted_texts = highlight_relevant_text_batch(query, results, output_format_ansi=False, force_language=force_language)
     except Exception as e:
         # Fallback to original texts
         highlighted_texts = [text_content for _, _, text_content, _ in results]
@@ -163,6 +170,21 @@ def create_custom_css() -> str:
         padding: 1.5rem;
         margin: 1rem 0;
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .direct-answer-container {
+        background: #f8f9fa;
+        border: 2px solid #28a745;
+        border-radius: 8px;
+        padding: 1.5rem;
+        margin: 1rem 0;
+        box-shadow: 0 2px 8px rgba(40, 167, 69, 0.2);
+    }
+    .direct-answer-container h3 {
+        margin-top: 0;
+        margin-bottom: 1rem;
+        color: #28a745;
+        border-bottom: 1px solid #28a745;
+        padding-bottom: 0.5rem;
     }
     .border-default {
         background: #ffffff;
@@ -275,7 +297,16 @@ def create_custom_css() -> str:
         .border-synthesis .border-title {
             background: #00e676;
             color: #1e1e1e;
-            border-bottom: 2px solid #00e676.
+            border-bottom: 2px solid #00e676;
+        }
+        .direct-answer-container {
+            background: #2d2d2d;
+            border: 2px solid #00e676;
+            box-shadow: 0 2px 8px rgba(0, 230, 118, 0.3);
+        }
+        .direct-answer-container h3 {
+            color: #00e676;
+            border-bottom: 1px solid #00e676;
         }
         .highlight-text {
             background-color: #193c69 !important;
@@ -295,11 +326,16 @@ def create_custom_css() -> str:
     </style>
     """
 
-def search_and_highlight(query: str, collection_names: str = "all"):
+def search_and_highlight(query: str, collection_names: str = "all", language_selection: str = "Auto-detect", search_method: str = "Hybrid", semantic_weight: float = 0.6, keyword_weight: float = 0.4):
     """
     Main search function as a generator.
     Yields a tuple: (direct_answer_md, html_results, synthesis_md, logs_html)
     """
+    # Convert language selection to force_language parameter
+    if language_selection == "Auto-detect":
+        force_language = None
+    else:
+        force_language = language_selection.lower()
     logs = []
     direct_answer_md = ""
     html_results = ""
@@ -344,13 +380,27 @@ def search_and_highlight(query: str, collection_names: str = "all"):
             logs.append(f"[search_and_highlight] Selected collection: {selected_pdf_name}")
         yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
 
-        logs.append("[search_and_highlight] Generating query embedding...")
+        # Determine search method and execute appropriate search
+        logs.append(f"[search_and_highlight] Using {search_method} search...")
         yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
-        query_embedding = generate_embeddings(query, normalize=True)
-
-        logs.append("[search_and_highlight] Querying Chroma collections...")
-        yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
-        all_results = query_chroma_collections(query_embedding, top_k=5, pdf_name=selected_pdf_name)
+        
+        if search_method == "BM25":
+            logs.append("[search_and_highlight] Performing BM25 keyword search with query enhancement...")
+            yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
+            all_results = query_fts5_collections(query, top_k=10, pdf_name=selected_pdf_name, use_enhancement=True)
+        elif search_method == "Semantic":
+            logs.append("[search_and_highlight] Generating query embedding for semantic search...")
+            yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
+            query_embedding = generate_query_embedding(query)
+            logs.append("[search_and_highlight] Performing semantic search...")
+            yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
+            all_results = query_chroma_collections(query_embedding, top_k=10, pdf_name=selected_pdf_name)
+        else:  # Hybrid (default)
+            logs.append(f"[search_and_highlight] Performing hybrid search ({semantic_weight:.1f} semantic + {keyword_weight:.1f} keyword) with query enhancement...")
+            yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
+            all_results = hybrid_search(query, top_k=10, pdf_name=selected_pdf_name, 
+                                      semantic_weight=semantic_weight, bm25_weight=keyword_weight, use_enhancement=True)
+        
         if not all_results:
             logs.append("[search_and_highlight] No results found for query.")
             yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
@@ -363,15 +413,17 @@ def search_and_highlight(query: str, collection_names: str = "all"):
         try:
             logs.append("[search_and_highlight] Generating direct answer...")
             yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
-            direct_answer = generate_direct_answer(query, top_results)
+            direct_answer = generate_direct_answer(query, top_results, force_language=force_language)
             direct_answer_md = f"""<div class="direct-answer-container">
 ### 🎯 Direct Answer
+
 {direct_answer}
 </div>"""
         except Exception as e:
             logs.append(f"[search_and_highlight] Error generating direct answer: {e}")
             direct_answer_md = f"""<div class="direct-answer-container">
 ### 🎯 Direct Answer
+
 Error generating direct answer: {str(e)}
 </div>"""
         yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
@@ -381,7 +433,7 @@ Error generating direct answer: {str(e)}
         try:
             logs.append("[search_and_highlight] Processing highlights for Gradio...")
             yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
-            processed_highlights = process_highlighting_for_gradio(query, top_results)
+            processed_highlights = process_highlighting_for_gradio(query, top_results, force_language=force_language)
         except Exception as e:
             logs.append(f"[search_and_highlight] Error in highlighting: {e}")
             processed_highlights = [(text, []) for _, _, text, _ in top_results]
@@ -414,7 +466,7 @@ Error generating direct answer: {str(e)}
             try:
                 logs.append(f"[search_and_highlight] Analyzing individual result {i}...")
                 yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
-                individual_analysis = analyze_individual_result_web(query, page_text, pdf_name, page_number, similarity)
+                individual_analysis = analyze_individual_result_web(query, page_text, pdf_name, page_number, similarity, force_language=force_language)
                 result_html += f"""
 {create_web_border("🧠 LLM ANALYSIS", "border-analysis")}
 <div class="individual-analysis">{individual_analysis}</div>
@@ -435,7 +487,7 @@ Error generating direct answer: {str(e)}
         try:
             logs.append("[search_and_highlight] Synthesizing results...")
             yield (direct_answer_md, "".join(html_sections), synthesis_md, get_logs_html())
-            synthesis = synthesize_results_web(query, top_results)
+            synthesis = synthesize_results_web(query, top_results, force_language=force_language)
             synthesis_md = f"### 🔬 Comprehensive Synthesis\n\n{synthesis}"
         except Exception as e:
             logs.append(f"[search_and_highlight] Error in synthesis: {e}")
@@ -456,6 +508,7 @@ Error generating direct answer: {str(e)}
     except Exception as e:
         logs.append(f"[search_and_highlight] Fatal error: {e}")
         yield ("", f"<div>Error: {str(e)}</div>", "", get_logs_html())
+
 
 
 def create_interface():
@@ -485,7 +538,7 @@ def create_interface():
         """)
 
         with gr.Row():
-            with gr.Column(scale=3):
+            with gr.Column(scale=4):
                 query_input = gr.Textbox(
                     label="🔍 Search Query",
                     placeholder="Enter your search query here...",
@@ -496,6 +549,40 @@ def create_interface():
                     label="📚 Collections",
                     value="all",
                     placeholder="all or comma-separated names"
+                )
+            with gr.Column(scale=1):
+                language_input = gr.Dropdown(
+                    label="🌐 Language",
+                    choices=["Auto-detect", "English", "Italian", "Spanish", "French"],
+                    value="Auto-detect",
+                    interactive=True
+                )
+        
+        with gr.Row():
+            with gr.Column(scale=1):
+                search_method_input = gr.Dropdown(
+                    label="🔍 Search Method",
+                    choices=["Hybrid", "Semantic", "BM25"],
+                    value="Hybrid",
+                    interactive=True
+                )
+            with gr.Column(scale=1):
+                semantic_weight_input = gr.Slider(
+                    label="🧠 Semantic Weight",
+                    minimum=0.0,
+                    maximum=1.0,
+                    step=0.1,
+                    value=0.6,
+                    visible=True
+                )
+            with gr.Column(scale=1):
+                keyword_weight_input = gr.Slider(
+                    label="🔤 Keyword Weight", 
+                    minimum=0.0,
+                    maximum=1.0,
+                    step=0.1,
+                    value=0.4,
+                    visible=True
                 )
 
         search_button = gr.Button("🚀 Search", variant="primary", size="lg")
@@ -518,18 +605,53 @@ def create_interface():
             value="<div>No logs yet.</div>"
         )
 
+        # Function to update slider visibility based on search method
+        def update_slider_visibility(search_method):
+            if search_method == "Hybrid":
+                return gr.update(visible=True), gr.update(visible=True)
+            else:
+                return gr.update(visible=False), gr.update(visible=False)
+        
+        # Function to normalize weights so they sum to 1.0
+        def normalize_semantic_weight(semantic_weight):
+            keyword_weight = 1.0 - semantic_weight
+            return gr.update(value=keyword_weight)
+        
+        def normalize_keyword_weight(keyword_weight):
+            semantic_weight = 1.0 - keyword_weight
+            return gr.update(value=semantic_weight)
+        
+        search_method_input.change(
+            fn=update_slider_visibility,
+            inputs=[search_method_input],
+            outputs=[semantic_weight_input, keyword_weight_input]
+        )
+        
+        # Auto-normalize weights when one slider changes
+        semantic_weight_input.change(
+            fn=normalize_semantic_weight,
+            inputs=[semantic_weight_input],
+            outputs=[keyword_weight_input]
+        )
+        
+        keyword_weight_input.change(
+            fn=normalize_keyword_weight,
+            inputs=[keyword_weight_input],
+            outputs=[semantic_weight_input]
+        )
+
         search_button.click(
             fn=search_and_highlight,
-            inputs=[query_input, collections_input],
+            inputs=[query_input, collections_input, language_input, search_method_input, semantic_weight_input, keyword_weight_input],
             outputs=[direct_answer_output, results_output, synthesis_output, logs_output],
-            show_progress=True  # removed stream=True
+            show_progress=True
         )
 
         query_input.submit(
             fn=search_and_highlight,
-            inputs=[query_input, collections_input],
+            inputs=[query_input, collections_input, language_input, search_method_input, semantic_weight_input, keyword_weight_input],
             outputs=[direct_answer_output, results_output, synthesis_output, logs_output],
-            show_progress=True  # removed stream=True
+            show_progress=True
         )
 
         gr.HTML("""

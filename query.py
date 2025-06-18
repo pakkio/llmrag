@@ -9,6 +9,7 @@ import numpy as np
 import re
 import chromadb
 from llm_wrapper import llm_call, generate_embeddings, test_openai_embeddings, check_openai_api
+from sqlite_fts5 import SQLiteFTS5Manager
 
 def setup_logging():
     """Configure logging"""
@@ -123,6 +124,205 @@ def generate_query_embedding(query: str) -> np.ndarray:
         logging.error(f"Error generating query embedding: {e}")
         raise
 
+def query_fts5_collections(query: str, top_k: int = 10, pdf_name: str = None, use_enhancement: bool = True) -> List[Tuple[str, int, str, float]]:
+    """
+    Query SQLite FTS5 collections for keyword-based matches with optional query enhancement.
+    Returns list of (pdf_name, page_number, text_content, bm25_score)
+    """
+    try:
+        search_query = query
+        
+        # Try query enhancement for better keyword matching
+        if use_enhancement:
+            try:
+                logging.info(f"Enhancing query: '{query}'")
+                enhancement = enhance_query(query)
+                enhanced_query = enhancement.get('enhanced_query', query)
+                translation = enhancement.get('translation', query)
+                synonyms = enhancement.get('synonyms', [])
+                
+                # Create expanded search query with translation and synonyms
+                # FTS5 syntax: use OR without quotes for multi-term queries
+                search_terms = [translation] + synonyms[:3]  # Use translation and top synonyms
+                # Clean terms and remove duplicates
+                clean_terms = []
+                for term in search_terms:
+                    if term and term.strip() and term not in clean_terms:
+                        # Split multi-word terms and use individual words
+                        words = term.split()
+                        clean_terms.extend([word for word in words if len(word) > 2])  # Skip very short words
+                
+                if clean_terms:
+                    # Join terms with spaces - FTS5Manager will handle OR logic internally
+                    search_query = ' '.join(clean_terms[:5])  # Limit to 5 terms to avoid complexity
+                else:
+                    search_query = query  # Fallback to original
+                
+                logging.info(f"Enhanced search query: {search_query}")
+                logging.info(f"Enhancement strategy: {enhancement.get('search_strategy', 'unknown')}")
+                
+            except Exception as e:
+                logging.warning(f"Query enhancement failed, using original: {e}")
+                search_query = query
+        
+        fts5_manager = SQLiteFTS5Manager()
+        
+        # Search using FTS5 BM25-style ranking with enhanced query
+        results = fts5_manager.search(
+            query=search_query,
+            pdf_name=pdf_name,
+            limit=top_k,
+            include_summary=True
+        )
+        
+        fts5_manager.close()
+        
+        logging.info(f"Found {len(results)} FTS5 keyword results (enhanced: {use_enhancement})")
+        
+        # Convert to expected format: (pdf_name, page_number, text_content, score)
+        formatted_results = []
+        for pdf_name, page_number, content, score, metadata in results:
+            formatted_results.append((pdf_name, page_number, content, score))
+        
+        return formatted_results
+        
+    except Exception as e:
+        logging.error(f"Error querying FTS5 collections: {e}")
+        return []
+
+def hybrid_search(query: str, top_k: int = 10, pdf_name: str = None, 
+                 semantic_weight: float = 0.6, bm25_weight: float = 0.4, use_enhancement: bool = True) -> List[Tuple[str, int, str, float]]:
+    """
+    Perform hybrid search combining semantic similarity (ChromaDB) and keyword matching (FTS5).
+    
+    Args:
+        query: Search query
+        top_k: Number of results to return
+        pdf_name: Optional specific PDF to search
+        semantic_weight: Weight for semantic search results (default: 0.6)
+        bm25_weight: Weight for BM25 keyword search results (default: 0.4)
+    
+    Returns:
+        List of (pdf_name, page_number, text_content, combined_score) sorted by combined score
+    """
+    try:
+        # Ensure weights sum to 1.0
+        total_weight = semantic_weight + bm25_weight
+        if total_weight > 0:
+            semantic_weight = semantic_weight / total_weight
+            bm25_weight = bm25_weight / total_weight
+        
+        logging.info(f"Performing hybrid search with {semantic_weight:.2f} semantic + {bm25_weight:.2f} keyword weighting")
+        
+        # Get semantic search results
+        query_embedding = generate_query_embedding(query)
+        semantic_results = query_chroma_collections(query_embedding, top_k * 2, pdf_name)
+        
+        # Get keyword search results with enhancement
+        keyword_results = query_fts5_collections(query, top_k * 2, pdf_name, use_enhancement=use_enhancement)
+        
+        # Remove duplicates and normalize scores for fair combination
+        def deduplicate_results(results: List[Tuple[str, int, str, float]]) -> List[Tuple[str, int, str, float]]:
+            """Remove duplicate results, keeping the best score for each unique (pdf, page, chunk) combination"""
+            seen = {}  # (pdf_name, page_number, text_hash) -> best_score
+            unique_results = []
+            
+            for pdf_name, page_number, text, score in results:
+                # Create a simple hash of the text content to identify duplicates
+                text_hash = hash(text.strip()[:100])  # Use first 100 chars for hash
+                key = (pdf_name, page_number, text_hash)
+                
+                if key not in seen or score > seen[key][3]:
+                    seen[key] = (pdf_name, page_number, text, score)
+            
+            return list(seen.values())
+
+        def normalize_scores(results: List[Tuple[str, int, str, float]]) -> List[Tuple[str, int, str, float]]:
+            if not results:
+                return []
+            
+            scores = [score for _, _, _, score in results]
+            max_score = max(scores) if scores else 1.0
+            min_score = min(scores) if scores else 0.0
+            
+            # Avoid division by zero
+            if max_score == min_score:
+                return [(pdf, page, text, 0.5) for pdf, page, text, _ in results]
+            
+            normalized = []
+            for pdf, page, text, score in results:
+                # Min-max normalization to [0, 1]
+                norm_score = (score - min_score) / (max_score - min_score)
+                normalized.append((pdf, page, text, norm_score))
+            
+            return normalized
+        
+        # Deduplicate and normalize both result sets
+        semantic_deduped = deduplicate_results(semantic_results)
+        keyword_deduped = deduplicate_results(keyword_results)
+        
+        semantic_normalized = normalize_scores(semantic_deduped)
+        keyword_normalized = normalize_scores(keyword_deduped)
+        
+        # Combine results using weighted scoring
+        combined_scores = {}  # (pdf_name, page_number, text_snippet) -> combined_score
+        
+        # Add semantic scores
+        for pdf_name, page_number, text, norm_score in semantic_normalized:
+            key = (pdf_name, page_number, text[:50])  # Use text snippet as part of key
+            combined_scores[key] = {
+                'text': text,
+                'semantic_score': norm_score,
+                'keyword_score': 0.0,
+                'combined_score': semantic_weight * norm_score
+            }
+        
+        # Add keyword scores
+        for pdf_name, page_number, text, norm_score in keyword_normalized:
+            key = (pdf_name, page_number, text[:50])
+            if key in combined_scores:
+                # Update existing entry
+                combined_scores[key]['keyword_score'] = norm_score
+                combined_scores[key]['combined_score'] += bm25_weight * norm_score
+            else:
+                # Create new entry (keyword-only result)
+                combined_scores[key] = {
+                    'text': text,
+                    'semantic_score': 0.0,
+                    'keyword_score': norm_score,
+                    'combined_score': bm25_weight * norm_score
+                }
+        
+        # Convert back to list format and sort by combined score
+        hybrid_results = []
+        for (pdf_name, page_number, _), scores_data in combined_scores.items():
+            hybrid_results.append((pdf_name, page_number, scores_data['text'], scores_data['combined_score']))
+        
+        # Sort by combined score (highest first)
+        hybrid_results.sort(key=lambda x: x[3], reverse=True)
+        
+        logging.info(f"Hybrid search: {len(semantic_results)} semantic → {len(semantic_deduped)} deduped")
+        logging.info(f"Hybrid search: {len(keyword_results)} keyword → {len(keyword_deduped)} deduped")
+        logging.info(f"Final hybrid results: {len(hybrid_results)} unique combinations")
+        
+        if hybrid_results and logging.getLogger().isEnabledFor(logging.DEBUG):
+            logging.debug("Top 3 hybrid scores:")
+            for i, (pdf, page, text, score) in enumerate(hybrid_results[:3]):
+                logging.debug(f"  {i+1}. {pdf} p.{page}: {score:.4f} - {text[:50]}...")
+        
+        return hybrid_results[:top_k]
+        
+    except Exception as e:
+        logging.error(f"Error in hybrid search: {e}")
+        # Fallback to semantic search only
+        logging.warning("Falling back to semantic search only")
+        try:
+            query_embedding = generate_query_embedding(query)
+            return query_chroma_collections(query_embedding, top_k, pdf_name)
+        except Exception as fallback_error:
+            logging.error(f"Fallback semantic search also failed: {fallback_error}")
+            return []
+
 
 def detect_language(text: str) -> str:
     """Detect the language of the text using LLM"""
@@ -143,13 +343,97 @@ Respond with only one word: the language name (e.g., "Italian", "English", "Fren
         return language.strip().lower()
     return "english"  # fallback
 
-def highlight_relevant_text_batch(query: str, results: List[Tuple[str, int, str, float]], output_format_ansi: bool = True) -> List[str]:
+def enhance_query(original_query: str, target_language: str = "english") -> dict:
+    """
+    Enhance and translate query using LLM for better search performance.
+    
+    Args:
+        original_query: The original search query
+        target_language: Target language for translation (default: english)
+    
+    Returns:
+        dict with enhanced_query, translations, synonyms, and related_terms
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": f"""You are a search query enhancement expert. Your task is to improve this search query for better document retrieval.
+
+Original Query: "{original_query}"
+
+Please provide:
+1. TRANSLATION: If the query is not in English, translate it to English
+2. ENHANCED_QUERY: Improve the query by adding relevant terms, synonyms, and alternative phrasings
+3. SYNONYMS: List alternative terms and synonyms that could be used
+4. RELATED_TERMS: Add conceptually related terms that might appear in relevant documents
+
+Format your response as JSON:
+{{
+    "original_query": "{original_query}",
+    "detected_language": "language_name",
+    "translation": "english translation if needed",
+    "enhanced_query": "improved searchable version with multiple terms",
+    "synonyms": ["synonym1", "synonym2", "synonym3"],
+    "related_terms": ["related1", "related2", "related3"],
+    "search_strategy": "brief explanation of enhancement approach"
+}}
+
+Examples:
+- "Nettuno" → enhance with "Neptune planet solar system eighth gas giant blue methane atmosphere"
+- "strategie di marketing" → enhance with "marketing strategies business promotional tactics advertising campaigns"
+- "machine learning" → enhance with "artificial intelligence AI neural networks deep learning algorithms"
+
+Focus on terms that would likely appear in academic, technical, or reference documents."""
+        }
+    ]
+    
+    try:
+        response, success = llm_call(messages, max_tokens=500)
+        if success:
+            import json
+            # Clean the response to extract JSON
+            response = response.strip()
+            if response.startswith('```json'):
+                response = response[7:]
+            if response.endswith('```'):
+                response = response[:-3]
+            
+            enhancement_data = json.loads(response.strip())
+            return enhancement_data
+        else:
+            # Fallback: basic structure
+            return {
+                "original_query": original_query,
+                "detected_language": "unknown",
+                "translation": original_query,
+                "enhanced_query": original_query,
+                "synonyms": [],
+                "related_terms": [],
+                "search_strategy": "fallback - no enhancement applied"
+            }
+    except Exception as e:
+        logging.warning(f"Query enhancement failed: {e}")
+        # Fallback: return original query
+        return {
+            "original_query": original_query,
+            "detected_language": "unknown", 
+            "translation": original_query,
+            "enhanced_query": original_query,
+            "synonyms": [],
+            "related_terms": [],
+            "search_strategy": "fallback - enhancement error"
+        }
+
+def highlight_relevant_text_batch(query: str, results: List[Tuple[str, int, str, float]], output_format_ansi: bool = True, force_language: str = None) -> List[str]:
     """Use LLM to batch highlight relevant parts of multiple texts and explain relevance"""
     if not results:
         return []
     
-    # Detect language from first result
-    detected_language = detect_language(results[0][2])
+    # Use forced language or detect language from first result
+    if force_language:
+        detected_language = force_language.lower()
+    else:
+        detected_language = detect_language(results[0][2])
     
     # Create language-specific instructions
     if detected_language == "italian":
@@ -216,7 +500,7 @@ Rules:
     
     if not success:
         # Fallback to individual highlighting
-        return [highlight_relevant_text(query, text_content, output_format_ansi=output_format_ansi) for _, _, text_content, _ in results]
+        return [highlight_relevant_text(query, text_content, output_format_ansi=output_format_ansi, force_language=force_language) for _, _, text_content, _ in results]
     
     # Parse the batch response to extract individual highlighted texts
     highlighted_texts = []
@@ -245,14 +529,17 @@ Rules:
     # Ensure we have the right number of results
     while len(highlighted_texts) < len(results):
         idx = len(highlighted_texts)
-        highlighted_texts.append(highlight_relevant_text(query, results[idx][2], output_format_ansi=output_format_ansi))
+        highlighted_texts.append(highlight_relevant_text(query, results[idx][2], output_format_ansi=output_format_ansi, force_language=force_language))
     
     return highlighted_texts[:len(results)]
 
-def highlight_relevant_text(query: str, page_text: str, output_format_ansi: bool = True) -> str:
+def highlight_relevant_text(query: str, page_text: str, output_format_ansi: bool = True, force_language: str = None) -> str:
     """Use LLM to find and highlight relevant parts of the text and explain relevance (single text version)"""
-    # Detect the language of the page text
-    detected_language = detect_language(page_text)
+    # Use forced language or detect the language of the page text
+    if force_language:
+        detected_language = force_language.lower()
+    else:
+        detected_language = detect_language(page_text)
     
     # Create language-specific instructions
     if detected_language == "italian":
@@ -331,9 +618,12 @@ def create_page_border(title: str, width: int = 70) -> Tuple[str, str, str]:
     bottom = f"╰{horizontal}╯"
     return top, middle, bottom
 
-def analyze_individual_result(query: str, result_text: str, pdf_name: str, page_number: int, similarity: float) -> str:
+def analyze_individual_result(query: str, result_text: str, pdf_name: str, page_number: int, similarity: float, force_language: str = None) -> str:
     """Use LLM to analyze and comment on individual search result relevance"""
-    detected_language = detect_language(result_text)
+    if force_language:
+        detected_language = force_language.lower()
+    else:
+        detected_language = detect_language(result_text)
     
     # Create language-specific instructions
     if detected_language == "italian":
@@ -373,7 +663,7 @@ Be concise but insightful. Focus on semantic connections and practical value."""
         return analysis.strip()
     return "Analysis unavailable for this result."
 
-def synthesize_results(query: str, results: List[Tuple[str, int, str, float]], max_results: int = 5) -> str:
+def synthesize_results(query: str, results: List[Tuple[str, int, str, float]], max_results: int = 5, force_language: str = None) -> str:
     """Use LLM to synthesize and conglomerate multiple search results"""
     if not results:
         return "No results to synthesize."
@@ -381,8 +671,11 @@ def synthesize_results(query: str, results: List[Tuple[str, int, str, float]], m
     # Take top results for synthesis
     top_results = results[:max_results]
     
-    # Detect language from first result
-    detected_language = detect_language(top_results[0][2])
+    # Use forced language or detect language from first result
+    if force_language:
+        detected_language = force_language.lower()
+    else:
+        detected_language = detect_language(top_results[0][2])
     
     # Create language-specific instructions
     if detected_language == "italian":
@@ -432,7 +725,7 @@ Provide a structured analysis (3-4 paragraphs) that helps someone understand the
         return synthesis.strip()
     return "Synthesis unavailable for these results."
 
-def generate_direct_answer(query: str, results: List[Tuple[str, int, str, float]], max_results: int = 5) -> str:
+def generate_direct_answer(query: str, results: List[Tuple[str, int, str, float]], max_results: int = 5, force_language: str = None) -> str:
     """Generate a comprehensive, detailed answer to the query based on search results with source attribution"""
     if not results:
         return "No information found to answer the query."
@@ -440,8 +733,11 @@ def generate_direct_answer(query: str, results: List[Tuple[str, int, str, float]
     # Take top results for answer generation
     top_results = results[:max_results]
     
-    # Detect language from first result
-    detected_language = detect_language(top_results[0][2])
+    # Use forced language or detect language from first result
+    if force_language:
+        detected_language = force_language.lower()
+    else:
+        detected_language = detect_language(top_results[0][2])
     
     # Create language-specific instructions
     if detected_language == "italian":
@@ -528,7 +824,8 @@ def display_results(similarities: List[Tuple[str, int, str, float]],
                    min_similarity: float = 0.0,
                    show_text: bool = True,
                    enhanced_analysis: bool = True,
-                   dual_answer: bool = False):
+                   dual_answer: bool = False,
+                   force_language: str = None):
     """Display the search results with improved formatting and LLM analysis"""
     
     # Store results for synthesis
@@ -554,7 +851,7 @@ def display_results(similarities: List[Tuple[str, int, str, float]],
         print(direct_bottom)
         
         try:
-            direct_answer = generate_direct_answer(query, displayed_results)
+            direct_answer = generate_direct_answer(query, displayed_results, force_language=force_language)
             print(f"\n\033[92m{direct_answer}\033[0m")  # Green for direct answer
         except Exception as e:
             print(f"\nError generating direct answer: {e}")
@@ -581,11 +878,11 @@ def display_results(similarities: List[Tuple[str, int, str, float]],
         try:
             # Use batch highlighting for better performance
             # For terminal output, ANSI is desired.
-            highlighted_texts = highlight_relevant_text_batch(query, displayed_results, output_format_ansi=True)
+            highlighted_texts = highlight_relevant_text_batch(query, displayed_results, output_format_ansi=True, force_language=force_language)
         except Exception as e:
             print(f"Error in batch highlighting, falling back to individual processing: {e}")
             # Fallback to individual highlighting
-            highlighted_texts = [highlight_relevant_text(query, text_content, output_format_ansi=True) for _, _, text_content, _ in displayed_results]
+            highlighted_texts = [highlight_relevant_text(query, text_content, output_format_ansi=True, force_language=force_language) for _, _, text_content, _ in displayed_results]
     
     # Display individual results with analysis
     for i, (pdf_name, page_number, text_content, similarity) in enumerate(displayed_results):
@@ -629,7 +926,7 @@ def display_results(similarities: List[Tuple[str, int, str, float]],
                     print(analysis_middle)
                     print(analysis_bottom)
                     
-                    individual_analysis = analyze_individual_result(query, text_content, pdf_name, page_number, similarity)
+                    individual_analysis = analyze_individual_result(query, text_content, pdf_name, page_number, similarity, force_language=force_language)
                     print(f"\n\033[95m{individual_analysis}\033[0m")  # Magenta for analysis
                 
             except Exception as e:
@@ -643,7 +940,7 @@ def display_results(similarities: List[Tuple[str, int, str, float]],
         print(synthesis_bottom)
         
         try:
-            synthesis = synthesize_results(query, displayed_results)
+            synthesis = synthesize_results(query, displayed_results, force_language=force_language)
             print(f"\n\033[93m{synthesis}\033[0m")  # Yellow for synthesis
         except Exception as e:
             print(f"\nError generating synthesis: {e}")
@@ -661,12 +958,29 @@ def display_results(similarities: List[Tuple[str, int, str, float]],
     print(summary_bottom)
 
 def main():
-    parser = argparse.ArgumentParser(description='Query PDF pages using semantic similarity')
+    parser = argparse.ArgumentParser(description='Query PDF pages using semantic similarity, keyword search, or hybrid search')
     parser.add_argument('query', nargs='?', help='Query text to search for')
     parser.add_argument('--pdf', '-p', help='Name of specific PDF to search (optional, searches all by default)')
     parser.add_argument('-k', '--top-k', type=int, default=3, help='Number of top results to show (default: 3)')
     parser.add_argument('-s', '--min-similarity', type=float, default=0.0, 
                        help='Minimum similarity threshold (default: 0.0)')
+    
+    # Search method options
+    search_group = parser.add_mutually_exclusive_group()
+    search_group.add_argument('--bm25', action='store_true',
+                             help='Use BM25 keyword search instead of semantic search')
+    search_group.add_argument('--hybrid', action='store_true', default=True,
+                             help='Use hybrid search combining semantic + keyword (default)')
+    search_group.add_argument('--semantic', action='store_true',
+                             help='Use semantic search only (ChromaDB)')
+    
+    # Hybrid search weighting
+    parser.add_argument('--semantic-weight', type=float, default=0.6,
+                       help='Weight for semantic search in hybrid mode (default: 0.6)')
+    parser.add_argument('--keyword-weight', type=float, default=0.4,
+                       help='Weight for keyword search in hybrid mode (default: 0.4)')
+    
+    # Display options
     parser.add_argument('--no-text', action='store_true', 
                        help='Hide text content (text shown by default)')
     parser.add_argument('--no-analysis', action='store_true',
@@ -677,6 +991,10 @@ def main():
                        help='Disable dual answer mode and show only detailed analysis')
     parser.add_argument('--list', action='store_true', 
                        help='List available PDF collections and exit')
+    parser.add_argument('--language', type=str, default=None,
+                       help='Force response language (italian, spanish, french, english). Default: auto-detect')
+    parser.add_argument('--no-enhancement', action='store_true',
+                       help='Disable query enhancement (translation and expansion). Enhancement enabled by default')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose logging')
     
     args = parser.parse_args()
@@ -707,16 +1025,36 @@ def main():
         parser.error("Query text is required unless using --list")
     
     try:
-        # Check embedding system
-        logging.info("Checking embedding system...")
-        check_embedding_system()
+        # Determine enhancement setting
+        use_enhancement = not args.no_enhancement
+        enhancement_status = "enabled" if use_enhancement else "disabled"
         
-        # Generate query embedding
-        query_embedding = generate_query_embedding(args.query)
+        # Determine search method
+        if args.bm25:
+            search_method = f"BM25 keyword search (enhancement {enhancement_status})"
+            # Only check embedding system if needed for analysis features
+            if not args.no_analysis:
+                check_embedding_system()
+            similarities = query_fts5_collections(args.query, max(args.top_k, 20), args.pdf, use_enhancement=use_enhancement)
+        elif args.semantic:
+            search_method = "Semantic search"
+            check_embedding_system()
+            query_embedding = generate_query_embedding(args.query)
+            similarities = query_chroma_collections(query_embedding, max(args.top_k, 20), args.pdf)
+        else:
+            # Default to hybrid search
+            search_method = f"Hybrid search ({args.semantic_weight:.1f} semantic + {args.keyword_weight:.1f} keyword, enhancement {enhancement_status})"
+            check_embedding_system()
+            similarities = hybrid_search(
+                args.query, 
+                max(args.top_k, 20), 
+                args.pdf,
+                args.semantic_weight,
+                args.keyword_weight,
+                use_enhancement=use_enhancement
+            )
         
-        # Query Chroma collections
-        logging.info("Querying Chroma collections...")
-        similarities = query_chroma_collections(query_embedding, max(args.top_k, 20), args.pdf)
+        logging.info(f"Using {search_method}")
         
         if not similarities:
             logging.error("No results found. Make sure you've run ingest.py first.")
@@ -726,7 +1064,7 @@ def main():
         show_text = not args.no_text
         enhanced_analysis = not args.no_analysis
         dual_answer = args.dual_answer and not args.no_dual
-        display_results(similarities, args.query, args.top_k, args.min_similarity, show_text, enhanced_analysis, dual_answer)
+        display_results(similarities, args.query, args.top_k, args.min_similarity, show_text, enhanced_analysis, dual_answer, force_language=args.language)
         
     except Exception as e:
         logging.error(f"Query failed: {e}")
