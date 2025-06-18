@@ -9,6 +9,7 @@ This is an advanced LLM RAG (Large Language Model - Retrieval Augmented Generati
 - **Semantic Search**: OpenAI text-embedding-3-large (3072 dimensions) with ChromaDB
 - **Keyword Search**: SQLite FTS5 with BM25 ranking and Porter stemming
 - **Hybrid Search**: Intelligent combination with configurable weighting (default: 60% semantic + 40% keyword)
+- **LLM Reranking**: Gemini Flash 1.5 for intelligent result reordering (~2s)
 - **LLM Analysis**: OpenRouter API (configurable models)
 - **PDF Processing**: PyMuPDF for text extraction
 - **Web Interface**: Gradio for interactive search
@@ -19,18 +20,19 @@ This is an advanced LLM RAG (Large Language Model - Retrieval Augmented Generati
    - Used for: text-embedding-3-large model
    - Required environment variable: `OPENAI_API_KEY`
 
-2. **OpenRouter API Key** - For LLM analysis and explanations
-   - Used for: Semantic analysis, text highlighting, language detection
+2. **OpenRouter API Key** - For LLM analysis, explanations, and reranking
+   - Used for: Semantic analysis, text highlighting, language detection, intelligent result reranking
    - Required environment variable: `OPENROUTER_API_KEY`
 
 ## File Structure (Current)
 ```
 llmrag/
 ├── ingest.py                    # PDF processing and dual-database ingestion
-├── query.py                     # Hybrid/semantic/keyword search engine
+├── query.py                     # Hybrid/semantic/keyword search engine with LLM reranking
 ├── sqlite_fts5.py              # SQLite FTS5 keyword search manager
 ├── llm_wrapper.py              # API integration (OpenAI + OpenRouter)
-├── gradio_browser.py           # Web interface for document browsing
+├── llm_reranker.py             # LLM-based intelligent result reranking system
+├── gradio_browser.py           # Web interface for document browsing with reranking controls
 ├── info.py                     # Database information and utilities
 ├── test_llm_wrapper.py         # API connection tests
 ├── test_chunking.py            # Text chunking tests
@@ -168,7 +170,38 @@ llmrag/
 - **UTF-8 Compatibility**: Proper handling of international text
 - **Summary Mode Support**: Separate tracking of summary vs regular content
 
-### 5. gradio_browser.py - Enhanced Web Interface
+### 5. llm_reranker.py - Intelligent Result Reranking System
+**Purpose**: LLM-powered reranking for improved result quality and relevance
+
+**Key Functions**:
+- `llm_rerank_results()` - Main reranking function using Gemini Flash 1.5
+- `build_reranking_prompt()` - Language-specific prompt construction for optimal LLM evaluation
+- `parse_ranking_response()` - Parse and validate LLM ranking decisions
+- `test_reranker()` - Comprehensive testing function with sample data
+
+**Features**:
+- **Intelligent Content Understanding**: LLM evaluates actual relevance rather than just mathematical similarity
+- **Multi-Language Support**: Native prompts in Italian, Spanish, French, and English
+- **Cost Control**: Configurable candidate limits (default: max 25 results to rerank)
+- **Quality Thresholds**: Minimum 8 candidates required for meaningful reranking
+- **Robust Fallback**: Returns original order if reranking fails
+- **Performance Optimized**: ~2 seconds processing time with Gemini Flash 1.5
+- **Comprehensive Logging**: Detailed process tracking and error handling
+
+**Reranking Criteria** (in order of importance):
+1. **Direct Relevance**: How well content directly answers the query
+2. **Completeness**: Complete and detailed information vs partial or vague
+3. **Specificity**: Specific concrete details vs generic information  
+4. **Authority**: Primary definitions vs secondary references
+5. **Context**: Contextualized information vs isolated facts
+
+**Configuration Options**:
+- `min_candidates`: 8 (minimum for reranking activation)
+- `max_candidates`: 25 (cost control limit)
+- `default_model`: google/gemini-flash-1.5 (fast and cost-effective)
+- `max_text_length`: 300 characters per candidate in prompt
+
+### 6. gradio_browser.py - Enhanced Web Interface
 **Purpose**: Feature-rich web-based document search matching terminal functionality
 
 **Key Functions**:
@@ -183,6 +216,7 @@ llmrag/
 **Web Interface Features**:
 - **Search Method Selection**: Dropdown for Hybrid/Semantic/BM25 search modes
 - **Hybrid Weight Control**: Interactive sliders for semantic/keyword balance (auto-normalizing to 1.0)
+- **LLM Reranking Control**: Checkbox to enable intelligent result reordering with Gemini Flash 1.5
 - **Language Selection**: Dropdown for Auto-detect/English/Italian/Spanish/French
 - **Collection Filtering**: Text input for specific document collections
 - **Rich Text Display**: Semantic highlighting with footnoted explanations
@@ -342,11 +376,20 @@ python ingest.py document.pdf --summary -v
 # Search documents (hybrid mode - default)
 python query.py "search query" -v
 
+# Search documents with LLM reranking (improved result quality)
+python query.py "search query" --rerank -v
+
 # Search documents (semantic only)
 python query.py "search query" --semantic -v
 
+# Search documents (semantic only with reranking)
+python query.py "search query" --semantic --rerank -v
+
 # Search documents (keyword/BM25 only)
 python query.py "search query" --bm25 -v
+
+# Search documents (keyword/BM25 with reranking)
+python query.py "search query" --bm25 --rerank -v
 
 # Custom hybrid weighting (80% semantic, 20% keyword)
 python query.py "search query" --semantic-weight 0.8 --keyword-weight 0.2 -v
@@ -439,11 +482,12 @@ The Gradio web interface (`gradio_browser.py`) provides an intuitive graphical i
 - **Highlighting**: Customizable color schemes and rules
 - **Output Formats**: Extensible result display options
 
-## Current Status: ✅ PRODUCTION READY WITH INTELLIGENT QUERY ENHANCEMENT
+## Current Status: ✅ PRODUCTION READY WITH LLM RERANKING & INTELLIGENT QUERY ENHANCEMENT
 
-The system is now completely clean of legacy code and ready for production use with advanced query enhancement and hybrid search capabilities:
+The system is now completely clean of legacy code and ready for production use with advanced LLM reranking, query enhancement, and hybrid search capabilities:
 
 ### **Core Architecture**:
+- **LLM Reranking System**: Gemini Flash 1.5 for intelligent result quality optimization (~2s)
 - **AI-Powered Query Enhancement**: LLM-based translation and term expansion for cross-language search
 - **Modern OpenAI-based embedding architecture**: High-quality text-embedding-3-large
 - **SQLite FTS5 keyword search**: BM25 ranking with Porter stemming and enhancement support
@@ -457,10 +501,19 @@ The system is now completely clean of legacy code and ready for production use w
 - **Keyword Search**: Pure BM25 ranking for exact term matching
 - **Configurable Weighting**: User-defined balance between search modes
 
+### **LLM Reranking System** (NEW):
+- **Intelligent Content Evaluation**: LLM analyzes actual relevance rather than just mathematical similarity
+- **Multi-Criteria Assessment**: Direct relevance, completeness, specificity, authority, and context
+- **Language-Aware Prompting**: Native prompts in Italian, Spanish, French, and English
+- **Cost-Controlled Processing**: Configurable limits (max 25 candidates, min 8 for activation)
+- **Performance Optimized**: ~2 seconds with Gemini Flash 1.5
+- **Universal Integration**: Available in CLI (`--rerank`) and Web interface (checkbox)
+- **Robust Fallback**: Returns original order if reranking fails
+
 ### **Enhanced Multi-Interface Access**: 
-- **CLI**: Rich terminal interface with Unicode borders and ANSI colors
-- **Web**: Professional Gradio interface with advanced CSS styling
-- **Search Modes**: All three search modes available in both interfaces
+- **CLI**: Rich terminal interface with Unicode borders and ANSI colors + reranking option
+- **Web**: Professional Gradio interface with advanced CSS styling + reranking checkbox
+- **Search Modes**: All three search modes available in both interfaces with optional reranking
 
 ### **Advanced Features**:
 - **Intelligent Query Enhancement**: AI-powered translation and term expansion for better search results
@@ -492,10 +545,12 @@ The system is now completely clean of legacy code and ready for production use w
 - **Smart Page Detection**: Automatic identification of summary/overview pages based on content analysis
 - **Web Interface Optimization**: Professional Gradio interface with rich highlighting and multi-level analysis
 
-The system now provides **best-in-class retrieval performance** by combining AI-powered query enhancement with the conceptual understanding of semantic search and the precision of keyword matching. The intelligent query processing enables seamless cross-language search, automatic term expansion, and dramatically improved recall while maintaining clean architecture and comprehensive error handling.
+The system now provides **best-in-class retrieval performance** by combining LLM reranking, AI-powered query enhancement, the conceptual understanding of semantic search, and the precision of keyword matching. The intelligent query processing and content-aware reranking enable seamless cross-language search, automatic term expansion, dramatically improved recall, and significantly enhanced result quality while maintaining clean architecture and comprehensive error handling.
 
 **Key Performance Improvements**:
+- **Intelligent Reranking**: LLM evaluates content relevance for optimal result ordering
+- **Quality Over Quantity**: Mathematical similarity + content understanding for superior results
 - **Cross-Language Search**: Query "Nettuno" (Italian) → Find "Neptune" (English documents)
 - **Zero to Hero**: Queries that previously returned 0 results now return 20+ relevant matches
 - **Enhanced Recall**: 2-10x improvement in finding relevant documents
-- **Maintained Precision**: Smart term selection preserves result quality
+- **Improved Precision**: LLM reranking + smart term selection optimizes result quality

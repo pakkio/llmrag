@@ -10,6 +10,7 @@ import re
 import chromadb
 from llm_wrapper import llm_call, generate_embeddings, test_openai_embeddings, check_openai_api
 from sqlite_fts5 import SQLiteFTS5Manager
+from llm_reranker import llm_rerank_results
 
 def setup_logging():
     """Configure logging"""
@@ -191,7 +192,7 @@ def query_fts5_collections(query: str, top_k: int = 10, pdf_name: str = None, us
         return []
 
 def hybrid_search(query: str, top_k: int = 10, pdf_name: str = None, 
-                 semantic_weight: float = 0.6, bm25_weight: float = 0.4, use_enhancement: bool = True) -> List[Tuple[str, int, str, float]]:
+                 semantic_weight: float = 0.6, bm25_weight: float = 0.4, use_enhancement: bool = True, use_reranking: bool = False, language: str = "auto") -> List[Tuple[str, int, str, float]]:
     """
     Perform hybrid search combining semantic similarity (ChromaDB) and keyword matching (FTS5).
     
@@ -201,6 +202,9 @@ def hybrid_search(query: str, top_k: int = 10, pdf_name: str = None,
         pdf_name: Optional specific PDF to search
         semantic_weight: Weight for semantic search results (default: 0.6)
         bm25_weight: Weight for BM25 keyword search results (default: 0.4)
+        use_enhancement: Whether to use query enhancement (default: True)
+        use_reranking: Whether to apply LLM reranking to results (default: False)
+        language: Language hint for LLM reranking (default: "auto")
     
     Returns:
         List of (pdf_name, page_number, text_content, combined_score) sorted by combined score
@@ -309,6 +313,20 @@ def hybrid_search(query: str, top_k: int = 10, pdf_name: str = None,
             logging.debug("Top 3 hybrid scores:")
             for i, (pdf, page, text, score) in enumerate(hybrid_results[:3]):
                 logging.debug(f"  {i+1}. {pdf} p.{page}: {score:.4f} - {text[:50]}...")
+        
+        # Apply LLM reranking if requested and we have enough candidates
+        if use_reranking and len(hybrid_results) >= 8:
+            try:
+                logging.info(f"Applying LLM reranking to {len(hybrid_results)} hybrid results")
+                reranked_results = llm_rerank_results(
+                    query=query,
+                    candidates=hybrid_results[:25],  # Limit to 25 for cost control
+                    language=language
+                )
+                logging.info("LLM reranking completed successfully")
+                return reranked_results[:top_k]
+            except Exception as e:
+                logging.warning(f"LLM reranking failed, using hybrid scores: {e}")
         
         return hybrid_results[:top_k]
         
@@ -995,6 +1013,8 @@ def main():
                        help='Force response language (italian, spanish, french, english). Default: auto-detect')
     parser.add_argument('--no-enhancement', action='store_true',
                        help='Disable query enhancement (translation and expansion). Enhancement enabled by default')
+    parser.add_argument('--rerank', action='store_true',
+                       help='Enable LLM reranking for improved result quality (~2s with Gemini Flash 1.5)')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose logging')
     
     args = parser.parse_args()
@@ -1031,19 +1051,38 @@ def main():
         
         # Determine search method
         if args.bm25:
-            search_method = f"BM25 keyword search (enhancement {enhancement_status})"
+            rerank_suffix = " + reranking" if args.rerank else ""
+            search_method = f"BM25 keyword search (enhancement {enhancement_status}{rerank_suffix})"
             # Only check embedding system if needed for analysis features
             if not args.no_analysis:
                 check_embedding_system()
             similarities = query_fts5_collections(args.query, max(args.top_k, 20), args.pdf, use_enhancement=use_enhancement)
+            
+            # Apply reranking to BM25 results if requested
+            if args.rerank and len(similarities) >= 8:
+                try:
+                    similarities = llm_rerank_results(args.query, similarities, language=args.language or "auto")
+                    logging.info("Applied LLM reranking to BM25 results")
+                except Exception as e:
+                    logging.warning(f"BM25 reranking failed: {e}")
         elif args.semantic:
-            search_method = "Semantic search"
+            rerank_suffix = " + reranking" if args.rerank else ""
+            search_method = f"Semantic search{rerank_suffix}"
             check_embedding_system()
             query_embedding = generate_query_embedding(args.query)
             similarities = query_chroma_collections(query_embedding, max(args.top_k, 20), args.pdf)
+            
+            # Apply reranking to semantic results if requested
+            if args.rerank and len(similarities) >= 8:
+                try:
+                    similarities = llm_rerank_results(args.query, similarities, language=args.language or "auto")
+                    logging.info("Applied LLM reranking to semantic results")
+                except Exception as e:
+                    logging.warning(f"Semantic reranking failed: {e}")
         else:
             # Default to hybrid search
-            search_method = f"Hybrid search ({args.semantic_weight:.1f} semantic + {args.keyword_weight:.1f} keyword, enhancement {enhancement_status})"
+            rerank_suffix = " + reranking" if args.rerank else ""
+            search_method = f"Hybrid search ({args.semantic_weight:.1f} semantic + {args.keyword_weight:.1f} keyword, enhancement {enhancement_status}{rerank_suffix})"
             check_embedding_system()
             similarities = hybrid_search(
                 args.query, 
@@ -1051,7 +1090,9 @@ def main():
                 args.pdf,
                 args.semantic_weight,
                 args.keyword_weight,
-                use_enhancement=use_enhancement
+                use_enhancement=use_enhancement,
+                use_reranking=args.rerank,
+                language=args.language or "auto"
             )
         
         logging.info(f"Using {search_method}")

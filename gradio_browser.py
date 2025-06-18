@@ -20,6 +20,7 @@ from query import (
     enhance_query
 )
 from llm_wrapper import llm_call, generate_embeddings, test_openai_embeddings
+from llm_reranker import llm_rerank_results
 
 def create_web_border(title: str, style_class: str = "border-default") -> str:
     """Create a web-friendly bordered section with title"""
@@ -326,7 +327,7 @@ def create_custom_css() -> str:
     </style>
     """
 
-def search_and_highlight(query: str, collection_names: str = "all", language_selection: str = "Auto-detect", search_method: str = "Hybrid", semantic_weight: float = 0.6, keyword_weight: float = 0.4):
+def search_and_highlight(query: str, collection_names: str = "all", language_selection: str = "Auto-detect", search_method: str = "Hybrid", semantic_weight: float = 0.6, keyword_weight: float = 0.4, use_reranking: bool = False):
     """
     Main search function as a generator.
     Yields a tuple: (direct_answer_md, html_results, synthesis_md, logs_html)
@@ -385,21 +386,47 @@ def search_and_highlight(query: str, collection_names: str = "all", language_sel
         yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
         
         if search_method == "BM25":
-            logs.append("[search_and_highlight] Performing BM25 keyword search with query enhancement...")
+            rerank_suffix = " + reranking" if use_reranking else ""
+            logs.append(f"[search_and_highlight] Performing BM25 keyword search with query enhancement{rerank_suffix}...")
             yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
             all_results = query_fts5_collections(query, top_k=10, pdf_name=selected_pdf_name, use_enhancement=True)
+            
+            # Apply reranking to BM25 results if requested
+            if use_reranking and len(all_results) >= 8:
+                try:
+                    logs.append("[search_and_highlight] Applying LLM reranking to BM25 results...")
+                    yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
+                    all_results = llm_rerank_results(query, all_results, language=force_language or "auto")
+                    logs.append("[search_and_highlight] LLM reranking completed successfully")
+                except Exception as e:
+                    logs.append(f"[search_and_highlight] BM25 reranking failed: {e}")
+                yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
         elif search_method == "Semantic":
-            logs.append("[search_and_highlight] Generating query embedding for semantic search...")
+            rerank_suffix = " + reranking" if use_reranking else ""
+            logs.append(f"[search_and_highlight] Generating query embedding for semantic search{rerank_suffix}...")
             yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
             query_embedding = generate_query_embedding(query)
             logs.append("[search_and_highlight] Performing semantic search...")
             yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
             all_results = query_chroma_collections(query_embedding, top_k=10, pdf_name=selected_pdf_name)
+            
+            # Apply reranking to semantic results if requested
+            if use_reranking and len(all_results) >= 8:
+                try:
+                    logs.append("[search_and_highlight] Applying LLM reranking to semantic results...")
+                    yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
+                    all_results = llm_rerank_results(query, all_results, language=force_language or "auto")
+                    logs.append("[search_and_highlight] LLM reranking completed successfully")
+                except Exception as e:
+                    logs.append(f"[search_and_highlight] Semantic reranking failed: {e}")
+                yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
         else:  # Hybrid (default)
-            logs.append(f"[search_and_highlight] Performing hybrid search ({semantic_weight:.1f} semantic + {keyword_weight:.1f} keyword) with query enhancement...")
+            rerank_suffix = " + reranking" if use_reranking else ""
+            logs.append(f"[search_and_highlight] Performing hybrid search ({semantic_weight:.1f} semantic + {keyword_weight:.1f} keyword) with query enhancement{rerank_suffix}...")
             yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
             all_results = hybrid_search(query, top_k=10, pdf_name=selected_pdf_name, 
-                                      semantic_weight=semantic_weight, bm25_weight=keyword_weight, use_enhancement=True)
+                                      semantic_weight=semantic_weight, bm25_weight=keyword_weight, use_enhancement=True,
+                                      use_reranking=use_reranking, language=force_language or "auto")
         
         if not all_results:
             logs.append("[search_and_highlight] No results found for query.")
@@ -584,6 +611,12 @@ def create_interface():
                     value=0.4,
                     visible=True
                 )
+            with gr.Column(scale=1):
+                reranking_input = gr.Checkbox(
+                    label="🧠 LLM Reranking",
+                    value=False,
+                    info="Use Gemini Flash 1.5 to intelligently reorder results (~2s)"
+                )
 
         search_button = gr.Button("🚀 Search", variant="primary", size="lg")
 
@@ -642,14 +675,14 @@ def create_interface():
 
         search_button.click(
             fn=search_and_highlight,
-            inputs=[query_input, collections_input, language_input, search_method_input, semantic_weight_input, keyword_weight_input],
+            inputs=[query_input, collections_input, language_input, search_method_input, semantic_weight_input, keyword_weight_input, reranking_input],
             outputs=[direct_answer_output, results_output, synthesis_output, logs_output],
             show_progress=True
         )
 
         query_input.submit(
             fn=search_and_highlight,
-            inputs=[query_input, collections_input, language_input, search_method_input, semantic_weight_input, keyword_weight_input],
+            inputs=[query_input, collections_input, language_input, search_method_input, semantic_weight_input, keyword_weight_input, reranking_input],
             outputs=[direct_answer_output, results_output, synthesis_output, logs_output],
             show_progress=True
         )
