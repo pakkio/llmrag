@@ -1,6 +1,6 @@
 # LLM RAG System
 
-A powerful Retrieval-Augmented Generation (RAG) system that processes PDF documents, generates semantic embeddings, and enables intelligent querying with highlighted results and relevance analysis.
+A comprehensive Retrieval-Augmented Generation (RAG) system that processes PDF documents and provides advanced search capabilities through hybrid semantic-keyword search, intelligent LLM reranking, adaptive query enhancement, and real-time confidence scoring.
 
 ## Features
 
@@ -9,6 +9,7 @@ A powerful Retrieval-Augmented Generation (RAG) system that processes PDF docume
 - **Semantic Search**: OpenAI embeddings using text-embedding-3-large for conceptual understanding
 - **Keyword Search**: SQLite FTS5 with BM25-style ranking for exact term matching
 - **Configurable Weights**: Customize semantic/keyword balance for optimal results
+- **LLM Reranking**: Intelligent result reordering using Gemini 2.0 Flash Lite (~2s processing)
 - **Adaptive Query Enhancement**: AI-powered query classification with automatic enhancement calibration
 - **Confidence Scoring**: Real-time quality assessment with visual indicators (🟢 HIGH, 🟡 MEDIUM, 🔴 LOW)
 
@@ -22,6 +23,7 @@ A powerful Retrieval-Augmented Generation (RAG) system that processes PDF docume
 |---------|----------------|------------------------|
 | Search Methods | ✅ `--hybrid`, `--semantic`, `--bm25` | ✅ Interactive dropdown |
 | Weight Control | ✅ `--semantic-weight`, `--keyword-weight` | ✅ Auto-normalizing sliders |
+| LLM Reranking | ✅ `--rerank` flag | ✅ Reranking checkbox |
 | Language Control | ✅ `--language italian` | ✅ Language dropdown |
 | Real-time Feedback | ✅ Verbose logging | ✅ Live progress + logs |
 | Visual Highlighting | ✅ ANSI colors | ✅ Rich HTML styling |
@@ -116,6 +118,7 @@ python query.py "your search query"
 - `-s, --min-similarity FLOAT`: Minimum similarity threshold (default: 0.0)
 - `--language LANG`: Force response language (italian, spanish, french, english, default: auto-detect)
 - `--enhancement MODE`: Enhancement mode (auto, minimal, full, maximum, off, default: auto)
+- `--rerank`: Enable LLM reranking for improved result quality (~2s)
 - `--no-enhancement`: Legacy flag to disable enhancement (equivalent to --enhancement=off)
 - `--no-text`: Hide text content
 - `--no-analysis`: Disable LLM analysis
@@ -148,6 +151,11 @@ python query.py --list
 # Keyword search for exact terminology
 python query.py "REST API endpoint" --bm25
 
+# LLM reranking for improved result quality (~2s processing time)
+python query.py "machine learning algorithms" --rerank
+python query.py "market analysis" --semantic --rerank
+python query.py "competitive strategies" --hybrid --rerank
+
 # Confidence scoring examples (visual quality assessment)
 python query.py "Neptune distance from sun" --dual-answer  # → 97% HIGH confidence
 python query.py "string theory cosmology" --dual-answer    # → 62% MEDIUM confidence  
@@ -162,7 +170,7 @@ python query.py "strategie di marketing" --language italian
 # Force English responses for multilingual documents
 python query.py "análisis de mercado" --language english
 
-# Adaptive query enhancement (NEW - automatic classification and calibration)
+# Adaptive query enhancement (automatic classification and calibration)
 python query.py "Quanto è grande il Sole?" --enhancement=auto      # Factual → minimal enhancement
 python query.py "Cos'è una supernova?" --enhancement=auto          # Conceptual → full enhancement  
 python query.py "Differenza tra pianeta e stella" --enhancement=auto # Comparative → maximum enhancement
@@ -201,6 +209,7 @@ Access at: http://localhost:7860
 ### **🔧 Search Configuration**
 - **🔍 Search Method Selection**: Dropdown for Hybrid/Semantic/BM25 search modes
 - **⚖️ Hybrid Weight Control**: Interactive sliders for semantic/keyword balance (auto-normalizing to 1.0)
+- **🔄 LLM Reranking**: Checkbox to enable intelligent result reordering (~2s)
 - **🌐 Language Selection**: Dropdown for Auto-detect/English/Italian/Spanish/French
 - **📚 Collection Filtering**: Text input for specific document collections
 - **🎯 Smart UI**: Sliders only visible when Hybrid mode is selected
@@ -251,6 +260,7 @@ python info.py
 4. **gradio_browser.py**: Enhanced web interface
    - **Search Method Control**: Full dropdown support for Hybrid/Semantic/BM25 modes
    - **Interactive Weight Tuning**: Real-time sliders for hybrid search balance (auto-normalizing)
+   - **LLM Reranking Control**: Checkbox to enable intelligent result reordering
    - **Language Selection**: Dropdown for forced language responses
    - **Rich semantic highlighting**: Footnoted explanations with multi-level analysis
    - **Professional UI**: Smart controls with conditional visibility and live feedback
@@ -265,7 +275,8 @@ python info.py
 - **Semantic Search**: OpenAI text-embedding-3-large (3072 dimensions) with ChromaDB
 - **Keyword Search**: SQLite FTS5 with BM25 ranking and Porter stemming
 - **Hybrid Search**: Intelligent combination with configurable weighting
-- **LLM**: Configurable via OpenRouter (default: Claude 3 Haiku)
+- **LLM Analysis**: OpenAI GPT-4.1 Nano via OpenRouter (configurable)
+- **LLM Reranking**: Google Gemini 2.0 Flash Lite for intelligent result ordering
 - **PDF Processing**: PyMuPDF for text extraction
 - **Web Interface**: Gradio for interactive search
 - **Text Processing**: Advanced UTF-8 handling and normalization
@@ -337,7 +348,7 @@ python query.py "business strategy" --language italian  # → Italian responses
 python query.py "estrategia empresarial" --language english  # → English responses
 ```
 
-### Adaptive Query Enhancement (NEW)
+### Adaptive Query Enhancement
 
 **Intelligent Query Classification + Automatic Enhancement Calibration**:
 The system now automatically classifies queries and adapts enhancement levels for optimal results:
@@ -414,16 +425,22 @@ python test_chunking.py
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `OPENROUTER_API_KEY` | OpenRouter API key for LLM calls | Yes |
+| `OPENROUTER_API_KEY` | OpenRouter API key for LLM calls and reranking | Yes |
 | `OPENAI_API_KEY` | OpenAI API key for embeddings | Yes |
-| `SEMANTIC_MODEL` | LLM model for analysis | No (defaults to Claude 3 Haiku) |
+| `SEMANTIC_MODEL` | LLM model for analysis | No (defaults to GPT-4.1 Nano) |
+| `RERANKING_MODEL` | Model for intelligent result reranking | No (defaults to Gemini 2.0 Flash Lite) |
+| `EMBEDDING_MODEL` | Embedding model | No (defaults to text-embedding-3-large) |
 
 ### Recommended Models
 
 For `SEMANTIC_MODEL`:
-- `anthropic/claude-3-haiku:beta` (default, fast & cost-effective)
-- `google/gemini-flash-2.0` (very fast, good analysis)
-- `anthropic/claude-3-sonnet:beta` (balanced performance)
+- `openai/gpt-4.1-nano` (current default, fast & cost-effective)
+- `anthropic/claude-3-haiku:beta` (excellent alternative)
+- `anthropic/claude-3-sonnet:beta` (balanced performance for complex analysis)
+
+For `RERANKING_MODEL`:
+- `google/gemini-2.0-flash-lite-001` (current default, optimized for reranking)
+- `anthropic/claude-3-haiku:beta` (alternative for reranking)
 
 ## Performance
 

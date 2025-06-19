@@ -10,9 +10,9 @@ This is an advanced LLM RAG (Large Language Model - Retrieval Augmented Generati
 - **Keyword Search**: SQLite FTS5 with BM25 ranking and Porter stemming
 - **Hybrid Search**: Intelligent combination with configurable weighting (default: 60% semantic + 40% keyword)
 - **Adaptive Query Enhancement**: AI-powered query classification and enhancement calibration
-- **LLM Reranking**: Gemini Flash 1.5 for intelligent result reordering (~2s)
+- **LLM Reranking**: Google Gemini 2.0 Flash Lite for intelligent result reordering (~2s)
 - **Confidence Scoring**: Multi-factor confidence assessment with visual indicators
-- **LLM Analysis**: OpenRouter API (configurable models)
+- **LLM Analysis**: OpenAI GPT-4.1 Nano via OpenRouter (configurable models)
 - **PDF Processing**: PyMuPDF for text extraction
 - **Web Interface**: Gradio for interactive search
 - **Text Processing**: Advanced UTF-8 handling and normalization
@@ -178,7 +178,7 @@ llmrag/
 **Purpose**: LLM-powered reranking for improved result quality and relevance
 
 **Key Functions**:
-- `llm_rerank_results()` - Main reranking function using Gemini Flash 1.5
+- `llm_rerank_results()` - Main reranking function using Gemini 2.0 Flash Lite
 - `build_reranking_prompt()` - Language-specific prompt construction for optimal LLM evaluation
 - `parse_ranking_response()` - Parse and validate LLM ranking decisions
 - `test_reranker()` - Comprehensive testing function with sample data
@@ -189,7 +189,7 @@ llmrag/
 - **Cost Control**: Configurable candidate limits (default: max 25 results to rerank)
 - **Quality Thresholds**: Minimum 8 candidates required for meaningful reranking
 - **Robust Fallback**: Returns original order if reranking fails
-- **Performance Optimized**: ~2 seconds processing time with Gemini Flash 1.5
+- **Performance Optimized**: ~2 seconds processing time with Gemini 2.0 Flash Lite
 - **Comprehensive Logging**: Detailed process tracking and error handling
 
 **Reranking Criteria** (in order of importance):
@@ -202,7 +202,7 @@ llmrag/
 **Configuration Options**:
 - `min_candidates`: 8 (minimum for reranking activation)
 - `max_candidates`: 25 (cost control limit)
-- `default_model`: google/gemini-flash-1.5 (fast and cost-effective)
+- `default_model`: google/gemini-2.0-flash-lite-001 (fast and cost-effective)
 - `max_text_length`: 300 characters per candidate in prompt
 
 ### 6. gradio_browser.py - Enhanced Web Interface
@@ -220,7 +220,7 @@ llmrag/
 **Web Interface Features**:
 - **Search Method Selection**: Dropdown for Hybrid/Semantic/BM25 search modes
 - **Hybrid Weight Control**: Interactive sliders for semantic/keyword balance (auto-normalizing to 1.0)
-- **LLM Reranking Control**: Checkbox to enable intelligent result reordering with Gemini Flash 1.5
+- **LLM Reranking Control**: Checkbox to enable intelligent result reordering with Gemini 2.0 Flash Lite
 - **Language Selection**: Dropdown for Auto-detect/English/Italian/Spanish/French
 - **Collection Filtering**: Text input for specific document collections
 - **Rich Text Display**: Semantic highlighting with footnoted explanations
@@ -540,15 +540,18 @@ The Gradio web interface (`gradio_browser.py`) provides an intuitive graphical i
 ## Configuration Options
 
 ### Environment Variables
-- `OPENROUTER_API_KEY` - Required for LLM analysis
+- `OPENROUTER_API_KEY` - Required for LLM analysis and reranking
 - `OPENAI_API_KEY` - Required for embeddings
-- `SEMANTIC_MODEL` - Optional LLM model selection
+- `SEMANTIC_MODEL` - Optional LLM model selection (default: openai/gpt-4.1-nano)
+- `RERANKING_MODEL` - Optional reranking model (default: google/gemini-2.0-flash-lite-001)
+- `EMBEDDING_MODEL` - Optional embedding model (default: text-embedding-3-large)
 - `PAK_DEBUG` - Optional debug logging
 
 ### Recommended Models
-- `anthropic/claude-3-haiku:beta` (default, fast & cost-effective)
-- `google/gemini-flash-2.0` (very fast analysis)
-- `anthropic/claude-3-sonnet:beta` (balanced performance)
+- `openai/gpt-4.1-nano` (current default, fast & cost-effective)
+- `anthropic/claude-3-haiku:beta` (excellent alternative)
+- `google/gemini-2.0-flash-lite-001` (for reranking, very fast)
+- `anthropic/claude-3-sonnet:beta` (balanced performance for complex analysis)
 
 ## Development Notes
 
@@ -572,13 +575,13 @@ The Gradio web interface (`gradio_browser.py`) provides an intuitive graphical i
 - **Highlighting**: Customizable color schemes and rules
 - **Output Formats**: Extensible result display options
 
-## Current Status: ✅ PRODUCTION READY WITH CONFIDENCE SCORING & INTELLIGENT QUERY ENHANCEMENT
+## Current Status: ✅ PRODUCTION READY - COMPREHENSIVE RAG SYSTEM
 
 The system is now completely clean of legacy code and ready for production use with advanced confidence scoring, LLM reranking, query enhancement, and hybrid search capabilities:
 
 ### **Core Architecture**:
 - **Confidence Scoring System**: Multi-factor quality assessment with visual indicators for honest result evaluation
-- **LLM Reranking System**: Gemini Flash 1.5 for intelligent result quality optimization (~2s)
+- **LLM Reranking System**: Gemini 2.0 Flash Lite for intelligent result quality optimization (~2s)
 - **AI-Powered Query Enhancement**: LLM-based translation and term expansion for cross-language search
 - **Modern OpenAI-based embedding architecture**: High-quality text-embedding-3-large
 - **SQLite FTS5 keyword search**: BM25 ranking with Porter stemming and enhancement support
@@ -592,12 +595,12 @@ The system is now completely clean of legacy code and ready for production use w
 - **Keyword Search**: Pure BM25 ranking for exact term matching
 - **Configurable Weighting**: User-defined balance between search modes
 
-### **LLM Reranking System** (NEW):
+### **LLM Reranking System**:
 - **Intelligent Content Evaluation**: LLM analyzes actual relevance rather than just mathematical similarity
 - **Multi-Criteria Assessment**: Direct relevance, completeness, specificity, authority, and context
 - **Language-Aware Prompting**: Native prompts in Italian, Spanish, French, and English
 - **Cost-Controlled Processing**: Configurable limits (max 25 candidates, min 8 for activation)
-- **Performance Optimized**: ~2 seconds with Gemini Flash 1.5
+- **Performance Optimized**: ~2 seconds with Gemini 2.0 Flash Lite
 - **Universal Integration**: Available in CLI (`--rerank`) and Web interface (checkbox)
 - **Robust Fallback**: Returns original order if reranking fails
 
@@ -614,7 +617,7 @@ The system is now completely clean of legacy code and ready for production use w
 - **Professional Presentation**: Color-coded sections and responsive design
 - **Dual-Database Architecture**: ChromaDB for embeddings + SQLite FTS5 for keywords
 
-### **Latest Enhancement - Confidence Scoring System (NEW)**: 
+### **Confidence Scoring System**: 
 - **Multi-Factor Assessment**: Translation quality, enhancement effectiveness, result scores, and coverage analysis
 - **Visual Confidence Indicators**: Color-coded percentage display (🟢 HIGH ≥80%, 🟡 MEDIUM 60-79%, 🔴 LOW <60%)
 - **Domain Boundary Detection**: System honestly communicates when operating outside core domain knowledge
@@ -622,7 +625,7 @@ The system is now completely clean of legacy code and ready for production use w
 - **Quality Transparency**: Users immediately understand result reliability and system limitations
 - **Research Guidance**: Helps users distinguish between strong domain matches and borderline connections
 
-### **Previous Enhancement - Adaptive Query Intelligence**: 
+### **Adaptive Query Intelligence**: 
 - **Adaptive Enhancement System**: AI-powered query classification with automatic enhancement calibration
 - **Query Type Detection**: Factual, conceptual, and comparative query classification using pattern matching
 - **Smart Enhancement Levels**: Minimal, full, and maximum enhancement modes tailored to query types
@@ -631,7 +634,7 @@ The system is now completely clean of legacy code and ready for production use w
 - **Intelligent Trade-offs**: Right-sized enhancement reduces noise for factual queries while maximizing recall for complex queries
 - **Backward Compatibility**: Legacy `--no-enhancement` flag continues to work
 
-### **Previous Major Enhancement - Intelligent Query Processing**: 
+### **Intelligent Query Processing**: 
 - **Query Enhancement System**: AI-powered translation and term expansion using LLM
 - **Cross-Language Search**: Search English documents using Italian, Spanish, French queries
 - **Automatic Term Expansion**: Adds synonyms and related terminology for better recall
@@ -639,21 +642,27 @@ The system is now completely clean of legacy code and ready for production use w
 - **CLI Integration**: `--no-enhancement` flag for exact term matching
 - **Web Interface Support**: Enhanced search available in all Gradio modes
 
-### **Previous Enhancement - Hybrid Search Integration**: 
-- **SQLite FTS5 Integration**: New `sqlite_fts5.py` module for BM25 keyword search
-- **Dual-Database Ingestion**: Modified `ingest.py` stores in both ChromaDB and SQLite FTS5
-- **Hybrid Query Engine**: Enhanced `query.py` with three search modes and intelligent score combination
+### **Hybrid Search Integration**: 
+- **SQLite FTS5 Integration**: `sqlite_fts5.py` module for BM25 keyword search
+- **Dual-Database Ingestion**: `ingest.py` stores in both ChromaDB and SQLite FTS5
+- **Hybrid Query Engine**: `query.py` with three search modes and intelligent score combination
 - **Smart Score Normalization**: Proper handling of different scoring systems
 - **Deduplication Logic**: Intelligent removal of duplicate results across search modes
 - **Graceful Fallback**: System continues with semantic search if keyword search fails
 - **Summary-Only Ingestion**: `--summary` flag works with both database systems
 - **Enhanced Source Attribution**: Clear formatting distinction between document sources and general knowledge
 
-### **Previous Enhancements**: 
+### **Additional Features**: 
 - **Smart Page Detection**: Automatic identification of summary/overview pages based on content analysis
 - **Web Interface Optimization**: Professional Gradio interface with rich highlighting and multi-level analysis
 
-The system now provides **best-in-class retrieval performance** by combining confidence scoring, adaptive query intelligence, LLM reranking, AI-powered query enhancement, the conceptual understanding of semantic search, and the precision of keyword matching. The intelligent query processing, automatic enhancement calibration, content-aware reranking, and honest confidence assessment enable seamless cross-language search, optimal enhancement levels, dramatically improved recall, significantly enhanced result quality, and transparent communication of system limitations.
+The system provides **production-ready retrieval performance** by combining confidence scoring, adaptive query intelligence, LLM reranking, AI-powered query enhancement, semantic search understanding, and keyword matching precision. The intelligent query processing, automatic enhancement calibration, content-aware reranking, and honest confidence assessment enable seamless cross-language search, optimal enhancement levels, dramatically improved recall, significantly enhanced result quality, and transparent communication of system limitations.
+
+**Current Model Configuration**:
+- **Main LLM**: OpenAI GPT-4.1 Nano (fast, cost-effective analysis)
+- **Reranking LLM**: Google Gemini 2.0 Flash Lite (optimized for result ordering)
+- **Embeddings**: OpenAI text-embedding-3-large (high-quality semantic understanding)
+- **All models configurable via environment variables**
 
 **Key Performance Improvements**:
 - **Honest Assessment**: Real-time confidence scoring distinguishes strong domain matches from borderline connections
