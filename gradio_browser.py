@@ -327,7 +327,7 @@ def create_custom_css() -> str:
     </style>
     """
 
-def search_and_highlight(query: str, collection_names: str = "all", language_selection: str = "Auto-detect", search_method: str = "Hybrid", fusion_strategy: str = "weighted", semantic_weight: float = 0.6, keyword_weight: float = 0.4, use_reranking: bool = False, use_page_enrichment: bool = False, include_previous_page: bool = False, include_next_page: bool = False):
+def search_and_highlight(query: str, collection_names: str = "all", language_selection: str = "Auto-detect", search_method: str = "Hybrid", fusion_strategy: str = "weighted", semantic_weight: float = 0.6, keyword_weight: float = 0.4, use_reranking: bool = False, use_page_enrichment: bool = False, include_previous_page: bool = False, include_next_page: bool = False, enhancement_mode: str = "auto"):
     """
     Main search function as a generator.
     Yields a tuple: (direct_answer_md, html_results, synthesis_md, logs_html)
@@ -387,9 +387,9 @@ def search_and_highlight(query: str, collection_names: str = "all", language_sel
         
         if search_method == "BM25":
             rerank_suffix = " + reranking" if use_reranking else ""
-            logs.append(f"[search_and_highlight] Performing BM25 keyword search with adaptive enhancement{rerank_suffix}...")
+            logs.append(f"[search_and_highlight] Performing BM25 keyword search with {enhancement_mode} enhancement{rerank_suffix}...")
             yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
-            all_results = query_fts5_collections(query, top_k=10, pdf_name=selected_pdf_name, enhancement_mode="auto")
+            all_results = query_fts5_collections(query, top_k=10, pdf_name=selected_pdf_name, enhancement_mode=enhancement_mode)
             
             # Apply reranking to BM25 results if requested
             if use_reranking and len(all_results) >= 8:
@@ -433,10 +433,10 @@ def search_and_highlight(query: str, collection_names: str = "all", language_sel
                         adjacent_pages.append("next")
                     page_enrichment_info += f" ({'+'.join(adjacent_pages)})"
             
-            logs.append(f"[search_and_highlight] Performing hybrid search ({fusion_strategy}, {semantic_weight:.1f} semantic + {keyword_weight:.1f} keyword) with adaptive enhancement{rerank_suffix}{page_enrichment_info}...")
+            logs.append(f"[search_and_highlight] Performing hybrid search ({fusion_strategy}, {semantic_weight:.1f} semantic + {keyword_weight:.1f} keyword) with {enhancement_mode} enhancement{rerank_suffix}{page_enrichment_info}...")
             yield (direct_answer_md, html_results, synthesis_md, get_logs_html())
             all_results = hybrid_search(query, top_k=10, pdf_name=selected_pdf_name, 
-                                      semantic_weight=semantic_weight, bm25_weight=keyword_weight, enhancement_mode="auto",
+                                      semantic_weight=semantic_weight, bm25_weight=keyword_weight, enhancement_mode=enhancement_mode,
                                       use_reranking=use_reranking, language=force_language or "auto", fusion_strategy=fusion_strategy,
                                       use_page_enrichment=use_page_enrichment, include_previous_page=include_previous_page, include_next_page=include_next_page)
         
@@ -593,7 +593,7 @@ def create_interface():
                 language_input = gr.Dropdown(
                     label="🌐 Language",
                     choices=["Auto-detect", "English", "Italian", "Spanish", "French"],
-                    value="Auto-detect",
+                    value="Italian",
                     interactive=True
                 )
         
@@ -639,8 +639,16 @@ def create_interface():
                     info="Use Gemini Flash 1.5 to intelligently reorder results (~2s)"
                 )
 
-        # Page enrichment controls (second row)
+        # Enhancement and page enrichment controls (second row)
         with gr.Row():
+            with gr.Column(scale=1):
+                enhancement_mode_input = gr.Dropdown(
+                    label="🔍 Query Enhancement",
+                    choices=["auto", "minimal", "full", "maximum", "off"],
+                    value="auto",
+                    interactive=True,
+                    info="AI-powered query translation and expansion"
+                )
             with gr.Column(scale=1):
                 page_enrichment_input = gr.Checkbox(
                     label="📄 Page Enrichment",
@@ -661,8 +669,8 @@ def create_interface():
                     visible=False,
                     info="Add next page for narrative context"
                 )
-            with gr.Column(scale=2):
-                gr.HTML("<div style='padding: 1rem; color: #666; font-size: 0.9em;'>💡 Page enrichment provides full page context to LLM reranking and answer generation</div>")
+            with gr.Column(scale=1):
+                gr.HTML("<div style='padding: 1rem; color: #666; font-size: 0.9em;'>💡 Enhancement: auto adapts to query type</div>")
 
         search_button = gr.Button("🚀 Search", variant="primary", size="lg")
 
@@ -743,14 +751,14 @@ def create_interface():
 
         search_button.click(
             fn=search_and_highlight,
-            inputs=[query_input, collections_input, language_input, search_method_input, fusion_strategy_input, semantic_weight_input, keyword_weight_input, reranking_input, page_enrichment_input, include_previous_input, include_next_input],
+            inputs=[query_input, collections_input, language_input, search_method_input, fusion_strategy_input, semantic_weight_input, keyword_weight_input, reranking_input, page_enrichment_input, include_previous_input, include_next_input, enhancement_mode_input],
             outputs=[direct_answer_output, results_output, synthesis_output, logs_output],
             show_progress=True
         )
 
         query_input.submit(
             fn=search_and_highlight,
-            inputs=[query_input, collections_input, language_input, search_method_input, fusion_strategy_input, semantic_weight_input, keyword_weight_input, reranking_input, page_enrichment_input, include_previous_input, include_next_input],
+            inputs=[query_input, collections_input, language_input, search_method_input, fusion_strategy_input, semantic_weight_input, keyword_weight_input, reranking_input, page_enrichment_input, include_previous_input, include_next_input, enhancement_mode_input],
             outputs=[direct_answer_output, results_output, synthesis_output, logs_output],
             show_progress=True
         )

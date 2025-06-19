@@ -10,6 +10,7 @@ A powerful Retrieval-Augmented Generation (RAG) system that processes PDF docume
 - **Keyword Search**: SQLite FTS5 with BM25-style ranking for exact term matching
 - **Configurable Weights**: Customize semantic/keyword balance for optimal results
 - **Adaptive Query Enhancement**: AI-powered query classification with automatic enhancement calibration
+- **Confidence Scoring**: Real-time quality assessment with visual indicators (🟢 HIGH, 🟡 MEDIUM, 🔴 LOW)
 
 ### **🌐 Multilingual Intelligence**
 - **Auto-Detection**: Intelligent language identification from document content
@@ -147,6 +148,11 @@ python query.py --list
 # Keyword search for exact terminology
 python query.py "REST API endpoint" --bm25
 
+# Confidence scoring examples (visual quality assessment)
+python query.py "Neptune distance from sun" --dual-answer  # → 97% HIGH confidence
+python query.py "string theory cosmology" --dual-answer    # → 62% MEDIUM confidence  
+python query.py "pasta recipe" --dual-answer               # → No results (outside domain)
+
 # Semantic search for conceptual understanding
 python query.py "What can we learn from David's relationship with God?" --semantic
 
@@ -201,13 +207,14 @@ Access at: http://localhost:7860
 
 ### **📊 Advanced Search Features**
 - **Interactive Search Interface**: Real-time document search with full CLI feature parity
+- **Confidence Scoring**: Visual quality indicators (🟢 HIGH ≥80%, 🟡 MEDIUM 60-79%, 🔴 LOW <60%)
 - **Rich Text Highlighting**: Advanced semantic highlighting with footnoted explanations
 - **Multi-Level Analysis**: Each result includes:
   - 📖 **Content**: Highlighted text with semantic annotations
   - 💡 **Relevance Analysis**: Numbered explanations for each highlight
   - 🧠 **LLM Analysis**: AI-powered relevance assessment
   - 🔬 **Comprehensive Synthesis**: Cross-result analysis and insights
-- **Dual Answer Mode**: Direct answers + detailed search result analysis
+- **Dual Answer Mode**: Direct answers + detailed search result analysis with confidence assessment
 - **Responsive Design**: Dark/light theme support with professional styling
 - **Live Feedback**: Real-time logs showing search method, weights, and progress
 

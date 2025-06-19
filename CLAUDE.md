@@ -11,6 +11,7 @@ This is an advanced LLM RAG (Large Language Model - Retrieval Augmented Generati
 - **Hybrid Search**: Intelligent combination with configurable weighting (default: 60% semantic + 40% keyword)
 - **Adaptive Query Enhancement**: AI-powered query classification and enhancement calibration
 - **LLM Reranking**: Gemini Flash 1.5 for intelligent result reordering (~2s)
+- **Confidence Scoring**: Multi-factor confidence assessment with visual indicators
 - **LLM Analysis**: OpenRouter API (configurable models)
 - **PDF Processing**: PyMuPDF for text extraction
 - **Web Interface**: Gradio for interactive search
@@ -114,10 +115,11 @@ llmrag/
 - `query_chroma_collections()` - Semantic similarity search across ChromaDB collections
 - `query_fts5_collections()` - Keyword search using SQLite FTS5 with BM25 ranking (with enhancement support)
 - `hybrid_search()` - Intelligent combination of semantic and keyword results (with enhancement support)
+- `calculate_confidence_score()` - Multi-factor confidence assessment for search quality
 - `generate_query_embedding()` - Convert query to embedding
 - `highlight_relevant_text()` - LLM-powered result highlighting
 - `detect_language()` - Automatic language detection
-- `display_results()` - Formatted result presentation
+- `display_results()` - Formatted result presentation with confidence indicators
 - `list_available_collections()` - Database introspection
 
 **Search Modes**:
@@ -138,6 +140,7 @@ llmrag/
 - **Multi-Modal Search**: Three distinct search approaches with enhancement support
 - **Smart Score Normalization**: Proper combination of different scoring systems
 - **Deduplication**: Intelligent removal of duplicate results across search modes
+- **Confidence Scoring**: Real-time assessment of search quality with visual indicators
 - Advanced text highlighting with color coding
 - **Enhanced Source Attribution**: Clear distinction between document sources and general knowledge with formatting `**source text** *(document, p.XX)*` vs `[general knowledge...]`
 - Multilingual explanations (Italian, Spanish, French, English)
@@ -300,6 +303,50 @@ llmrag/
 - **Supported**: Italian, Spanish, French, English
 - **Fallback**: English for unsupported languages
 
+### Confidence Scoring System (NEW)
+
+**Purpose**: Real-time assessment of search quality and domain boundary detection
+
+**Multi-Factor Assessment**:
+1. **Translation Confidence** (20% weight): Language detection and translation quality
+   - Native English: 100% confidence
+   - Translated queries: 85% confidence (slight uncertainty in translation accuracy)
+
+2. **Enhancement Quality** (20% weight): Query expansion effectiveness
+   - Rich enhancement (>3 terms): 100% confidence  
+   - Good enhancement (1-3 terms): 80% confidence
+   - Minimal/no enhancement: 50% confidence
+
+3. **Result Score Quality** (40% weight): Semantic similarity strength
+   - Excellent matches (≥0.9 avg): 100% confidence
+   - Good matches (≥0.7 avg): 85% confidence  
+   - Moderate matches (≥0.5 avg): 65% confidence
+   - Weak matches (≥0.3 avg): 45% confidence
+   - Very weak matches (<0.3 avg): 25% confidence
+
+4. **Result Count** (20% weight): Coverage and recall assessment
+   - Abundant results (≥10): 100% confidence
+   - Good coverage (5-9): 90% confidence
+   - Limited results (2-4): 80% confidence
+   - Minimal results (1): 70% confidence
+   - No results: 60% confidence
+
+**Confidence Levels**:
+- 🟢 **HIGH (≥80%)**: Strong domain match, excellent results
+- 🟡 **MEDIUM (60-79%)**: Borderline domain, moderate results  
+- 🔴 **LOW (<60%)**: Outside domain, weak connections
+
+**Visual Integration**:
+- **CLI**: Color-coded confidence percentage in Direct Answer header
+- **Web**: Confidence indicator in result display (future enhancement)
+- **Logging**: Detailed confidence breakdown in debug mode
+
+**Benefits**:
+- **Honest Communication**: Users know when system is operating at domain boundaries
+- **Quality Assessment**: Immediate feedback on search effectiveness  
+- **Research Guidance**: Helps users understand result reliability
+- **Adaptive Behavior**: System acknowledges its limitations transparently
+
 ## Query Enhancement Examples
 
 ### **Real-World Enhancement Results**
@@ -435,6 +482,11 @@ python query.py "search query" --enhancement=full -v      # Balanced (previous d
 python query.py "search query" --enhancement=maximum -v   # Comparative optimization
 python query.py "search query" --enhancement=off -v       # Disable enhancement
 
+# Confidence scoring examples (NEW - visual quality assessment)
+python query.py "Nettuno distanza dal sole" --dual-answer -v    # → 97% HIGH confidence (strong domain match)
+python query.py "teoria stringhe cosmologia" --dual-answer -v   # → 62% MEDIUM confidence (borderline domain)
+python query.py "ricetta carbonara" --dual-answer -v           # → No results (outside domain)
+
 # Legacy query enhancement examples (automatic translation and expansion)
 python query.py "Nettuno" --bm25 -v  # → Enhanced to "Neptune planet eighth planet"
 python query.py "strategie di marketing" --hybrid -v  # → Enhanced with related terms
@@ -520,11 +572,12 @@ The Gradio web interface (`gradio_browser.py`) provides an intuitive graphical i
 - **Highlighting**: Customizable color schemes and rules
 - **Output Formats**: Extensible result display options
 
-## Current Status: ✅ PRODUCTION READY WITH LLM RERANKING & INTELLIGENT QUERY ENHANCEMENT
+## Current Status: ✅ PRODUCTION READY WITH CONFIDENCE SCORING & INTELLIGENT QUERY ENHANCEMENT
 
-The system is now completely clean of legacy code and ready for production use with advanced LLM reranking, query enhancement, and hybrid search capabilities:
+The system is now completely clean of legacy code and ready for production use with advanced confidence scoring, LLM reranking, query enhancement, and hybrid search capabilities:
 
 ### **Core Architecture**:
+- **Confidence Scoring System**: Multi-factor quality assessment with visual indicators for honest result evaluation
 - **LLM Reranking System**: Gemini Flash 1.5 for intelligent result quality optimization (~2s)
 - **AI-Powered Query Enhancement**: LLM-based translation and term expansion for cross-language search
 - **Modern OpenAI-based embedding architecture**: High-quality text-embedding-3-large
@@ -561,7 +614,15 @@ The system is now completely clean of legacy code and ready for production use w
 - **Professional Presentation**: Color-coded sections and responsive design
 - **Dual-Database Architecture**: ChromaDB for embeddings + SQLite FTS5 for keywords
 
-### **Latest Enhancement - Adaptive Query Intelligence (NEW)**: 
+### **Latest Enhancement - Confidence Scoring System (NEW)**: 
+- **Multi-Factor Assessment**: Translation quality, enhancement effectiveness, result scores, and coverage analysis
+- **Visual Confidence Indicators**: Color-coded percentage display (🟢 HIGH ≥80%, 🟡 MEDIUM 60-79%, 🔴 LOW <60%)
+- **Domain Boundary Detection**: System honestly communicates when operating outside core domain knowledge
+- **Real-Time Evaluation**: Confidence calculated and displayed with every search result
+- **Quality Transparency**: Users immediately understand result reliability and system limitations
+- **Research Guidance**: Helps users distinguish between strong domain matches and borderline connections
+
+### **Previous Enhancement - Adaptive Query Intelligence**: 
 - **Adaptive Enhancement System**: AI-powered query classification with automatic enhancement calibration
 - **Query Type Detection**: Factual, conceptual, and comparative query classification using pattern matching
 - **Smart Enhancement Levels**: Minimal, full, and maximum enhancement modes tailored to query types
@@ -592,14 +653,18 @@ The system is now completely clean of legacy code and ready for production use w
 - **Smart Page Detection**: Automatic identification of summary/overview pages based on content analysis
 - **Web Interface Optimization**: Professional Gradio interface with rich highlighting and multi-level analysis
 
-The system now provides **best-in-class retrieval performance** by combining adaptive query intelligence, LLM reranking, AI-powered query enhancement, the conceptual understanding of semantic search, and the precision of keyword matching. The intelligent query processing, automatic enhancement calibration, and content-aware reranking enable seamless cross-language search, optimal enhancement levels, dramatically improved recall, and significantly enhanced result quality while maintaining clean architecture and comprehensive error handling.
+The system now provides **best-in-class retrieval performance** by combining confidence scoring, adaptive query intelligence, LLM reranking, AI-powered query enhancement, the conceptual understanding of semantic search, and the precision of keyword matching. The intelligent query processing, automatic enhancement calibration, content-aware reranking, and honest confidence assessment enable seamless cross-language search, optimal enhancement levels, dramatically improved recall, significantly enhanced result quality, and transparent communication of system limitations.
 
 **Key Performance Improvements**:
+- **Honest Assessment**: Real-time confidence scoring distinguishes strong domain matches from borderline connections
+- **Quality Transparency**: Visual indicators (🟢 HIGH 97%, 🟡 MEDIUM 62%, 🔴 LOW) inform users of result reliability
+- **Domain Boundary Detection**: System acknowledges when operating outside core knowledge areas
 - **Adaptive Intelligence**: Automatic query classification and enhancement calibration for optimal results
 - **Intelligent Reranking**: LLM evaluates content relevance for optimal result ordering
-- **Quality Over Quantity**: Mathematical similarity + content understanding for superior results
+- **Quality Over Quantity**: Mathematical similarity + content understanding + confidence assessment for superior results
 - **Smart Enhancement**: Right-sized enhancement reduces noise for factual queries, maximizes recall for complex queries
-- **Cross-Language Search**: Query "Nettuno" (Italian) → Find "Neptune" (English documents)
+- **Cross-Language Search**: Query "Nettuno" (Italian) → Find "Neptune" (English documents) with 97% confidence
 - **Zero to Hero**: Queries that previously returned 0 results now return 20+ relevant matches
 - **Enhanced Recall**: 2-10x improvement in finding relevant documents
-- **Improved Precision**: LLM reranking + smart term selection + adaptive enhancement optimizes result quality
+- **Improved Precision**: LLM reranking + smart term selection + adaptive enhancement + confidence scoring optimizes result quality
+- **Research Guidance**: Users immediately understand when results are from core domain vs marginal connections

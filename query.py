@@ -533,7 +533,7 @@ def smart_deduplicate_pages(enriched_results: List[Tuple[str, int, str, float]])
     return deduplicated_results
 
 def hybrid_search(query: str, top_k: int = 10, pdf_name: str = None, 
-                 semantic_weight: float = 0.6, bm25_weight: float = 0.4, enhancement_mode: str = "full", use_reranking: bool = False, language: str = "auto", fusion_strategy: str = "weighted", use_page_enrichment: bool = False, include_previous_page: bool = False, include_next_page: bool = False) -> List[Tuple[str, int, str, float]]:
+                 semantic_weight: float = 0.6, bm25_weight: float = 0.4, enhancement_mode: str = "full", use_reranking: bool = False, language: str = "auto", fusion_strategy: str = "weighted", use_page_enrichment: bool = False, include_previous_page: bool = False, include_next_page: bool = False) -> Tuple[List[Tuple[str, int, str, float]], float]:
     """
     Perform hybrid search combining semantic similarity (ChromaDB) and keyword matching (FTS5).
     
@@ -622,11 +622,38 @@ def hybrid_search(query: str, top_k: int = 10, pdf_name: str = None,
                     language=language
                 )
                 logging.info("LLM reranking completed successfully")
-                return reranked_results[:top_k]
+                # Calculate confidence score for reranked results
+                try:
+                    enhancement_data = {}
+                    if enhancement_mode != "off":
+                        try:
+                            enhancement_data = enhance_query_adaptive(query, enhancement_mode)
+                        except:
+                            enhancement_data = {'detected_language': 'unknown', 'synonyms': [], 'related_terms': []}
+                    
+                    confidence = calculate_confidence_score(query, enhancement_data, reranked_results)
+                    return reranked_results[:top_k], confidence
+                except Exception as e:
+                    logging.warning(f"Confidence calculation failed: {e}")
+                    return reranked_results[:top_k], 0.8  # Slightly higher for reranked
             except Exception as e:
                 logging.warning(f"LLM reranking failed, using fusion scores: {e}")
         
-        return results_for_processing[:top_k]
+        # Calculate confidence score
+        try:
+            # Get enhancement data for confidence calculation
+            enhancement_data = {}
+            if enhancement_mode != "off":
+                try:
+                    enhancement_data = enhance_query_adaptive(query, enhancement_mode)
+                except:
+                    enhancement_data = {'detected_language': 'unknown', 'synonyms': [], 'related_terms': []}
+            
+            confidence = calculate_confidence_score(query, enhancement_data, results_for_processing)
+            return results_for_processing[:top_k], confidence
+        except Exception as e:
+            logging.warning(f"Confidence calculation failed: {e}")
+            return results_for_processing[:top_k], 0.75  # Default confidence
         
     except Exception as e:
         logging.error(f"Error in hybrid search: {e}")
@@ -634,10 +661,11 @@ def hybrid_search(query: str, top_k: int = 10, pdf_name: str = None,
         logging.warning("Falling back to semantic search only")
         try:
             query_embedding = generate_query_embedding(query)
-            return query_chroma_collections(query_embedding, top_k, pdf_name)
+            fallback_results = query_chroma_collections(query_embedding, top_k, pdf_name)
+            return fallback_results, 0.5  # Low confidence for fallback
         except Exception as fallback_error:
             logging.error(f"Fallback semantic search also failed: {fallback_error}")
-            return []
+            return [], 0.0  # No confidence for empty results
 
 
 def detect_language(text: str) -> str:
@@ -702,6 +730,98 @@ def classify_query_type(query: str) -> str:
         return "conceptual"
     
     return "default"
+
+def calculate_confidence_score(query: str, enhancement_data: dict, search_results: List[Tuple[str, int, str, float]]) -> float:
+    """
+    Calculate confidence score based on query enhancement and result quality.
+    
+    Args:
+        query: Original query
+        enhancement_data: Enhancement results from enhance_query_adaptive
+        search_results: Search results with scores
+    
+    Returns:
+        Confidence score between 0.0 and 1.0
+    """
+    confidence_factors = []
+    
+    # Factor 1: Translation confidence (0.7-1.0)
+    if enhancement_data.get('detected_language', 'english').lower() == 'english':
+        translation_confidence = 1.0  # No translation needed
+    else:
+        # Non-English queries have slightly lower confidence
+        translation_confidence = 0.85
+    confidence_factors.append(('translation', translation_confidence))
+    
+    # Factor 2: Enhancement quality (0.5-1.0)
+    synonyms = enhancement_data.get('synonyms', [])
+    related_terms = enhancement_data.get('related_terms', [])
+    total_terms = len(synonyms) + len(related_terms)
+    
+    if total_terms == 0:
+        enhancement_confidence = 0.5  # Minimal enhancement
+    elif total_terms <= 3:
+        enhancement_confidence = 0.8  # Good enhancement
+    else:
+        enhancement_confidence = 1.0  # Rich enhancement
+    confidence_factors.append(('enhancement', enhancement_confidence))
+    
+    # Factor 3: Result score quality (0.2-1.0)
+    if not search_results:
+        result_confidence = 0.2
+    else:
+        top_scores = [score for _, _, _, score in search_results[:5]]
+        avg_top_score = sum(top_scores) / len(top_scores)
+        
+        # Check for weak semantic connections by analyzing score distribution
+        if len(top_scores) > 1:
+            score_std = np.std(top_scores)
+            if score_std < 0.1 and avg_top_score < 0.7:
+                # Low scores with little variation = weak matching
+                result_confidence = 0.3
+            elif avg_top_score >= 0.9:
+                result_confidence = 1.0  # Excellent matches
+            elif avg_top_score >= 0.7:
+                result_confidence = 0.85  # Good matches
+            elif avg_top_score >= 0.5:
+                result_confidence = 0.65  # Moderate matches
+            elif avg_top_score >= 0.3:
+                result_confidence = 0.45  # Weak matches
+            else:
+                result_confidence = 0.25  # Very weak matches
+        else:
+            if avg_top_score >= 0.8:
+                result_confidence = 0.9
+            elif avg_top_score >= 0.5:
+                result_confidence = 0.7
+            else:
+                result_confidence = 0.4
+    confidence_factors.append(('results', result_confidence))
+    
+    # Factor 4: Result count (0.6-1.0)
+    result_count = len(search_results)
+    if result_count >= 10:
+        count_confidence = 1.0
+    elif result_count >= 5:
+        count_confidence = 0.9
+    elif result_count >= 2:
+        count_confidence = 0.8
+    elif result_count >= 1:
+        count_confidence = 0.7
+    else:
+        count_confidence = 0.6
+    confidence_factors.append(('count', count_confidence))
+    
+    # Calculate weighted average
+    weights = {'translation': 0.2, 'enhancement': 0.2, 'results': 0.4, 'count': 0.2}
+    total_confidence = sum(weights[factor] * score for factor, score in confidence_factors)
+    
+    # Log confidence breakdown for debugging
+    if logging.getLogger().isEnabledFor(logging.DEBUG):
+        factor_details = ', '.join([f"{factor}: {score:.2f}" for factor, score in confidence_factors])
+        logging.debug(f"Confidence breakdown: {factor_details} → {total_confidence:.2f}")
+    
+    return round(total_confidence, 2)
 
 def enhance_query_adaptive(original_query: str, enhancement_mode: str = "full") -> dict:
     """
@@ -1261,7 +1381,8 @@ def display_results(similarities: List[Tuple[str, int, str, float]],
                    show_text: bool = True,
                    enhanced_analysis: bool = True,
                    dual_answer: bool = False,
-                   force_language: str = None):
+                   force_language: str = None,
+                   confidence_score: float = None):
     """Display the search results with improved formatting and LLM analysis"""
     
     # Store results for synthesis
@@ -1280,8 +1401,22 @@ def display_results(similarities: List[Tuple[str, int, str, float]],
     
     # If dual answer mode is enabled, show both parts
     if dual_answer:
-        # PART 1: Direct Answer (no meta-analysis)
-        direct_top, direct_middle, direct_bottom = create_page_border("🎯 DIRECT ANSWER", 80)
+        # PART 1: Direct Answer with confidence score
+        confidence_text = ""
+        if confidence_score is not None:
+            if confidence_score >= 0.8:
+                confidence_color = "\033[92m"  # Green
+                confidence_level = "HIGH"
+            elif confidence_score >= 0.6:
+                confidence_color = "\033[93m"  # Yellow
+                confidence_level = "MEDIUM"
+            else:
+                confidence_color = "\033[91m"  # Red
+                confidence_level = "LOW"
+            
+            confidence_text = f" │ {confidence_color}Confidence: {confidence_score:.0%} ({confidence_level})\033[0m"
+        
+        direct_top, direct_middle, direct_bottom = create_page_border(f"🎯 DIRECT ANSWER{confidence_text}", 90)
         print(f"\n{direct_top}")
         print(direct_middle)  
         print(direct_bottom)
@@ -1497,10 +1632,21 @@ def main():
                 check_embedding_system()
             similarities = query_fts5_collections(args.query, max(args.top_k, 20), args.pdf, enhancement_mode=enhancement_mode)
             
+            # Calculate confidence for BM25 results
+            try:
+                enhancement_data = {}
+                if enhancement_mode != "off":
+                    enhancement_data = enhance_query_adaptive(args.query, enhancement_mode)
+                confidence_score = calculate_confidence_score(args.query, enhancement_data, similarities)
+            except Exception as e:
+                logging.warning(f"Confidence calculation failed: {e}")
+                confidence_score = 0.7
+            
             # Apply reranking to BM25 results if requested
             if args.rerank and len(similarities) >= 8:
                 try:
                     similarities = llm_rerank_results(args.query, similarities, language=args.language or "auto")
+                    confidence_score = min(confidence_score + 0.1, 1.0)  # Boost confidence for reranking
                     logging.info("Applied LLM reranking to BM25 results")
                 except Exception as e:
                     logging.warning(f"BM25 reranking failed: {e}")
@@ -1511,10 +1657,19 @@ def main():
             query_embedding = generate_query_embedding(args.query)
             similarities = query_chroma_collections(query_embedding, max(args.top_k, 20), args.pdf)
             
+            # Calculate confidence for semantic results  
+            try:
+                enhancement_data = {'detected_language': 'english', 'synonyms': [], 'related_terms': []}
+                confidence_score = calculate_confidence_score(args.query, enhancement_data, similarities)
+            except Exception as e:
+                logging.warning(f"Confidence calculation failed: {e}")
+                confidence_score = 0.75
+            
             # Apply reranking to semantic results if requested
             if args.rerank and len(similarities) >= 8:
                 try:
                     similarities = llm_rerank_results(args.query, similarities, language=args.language or "auto")
+                    confidence_score = min(confidence_score + 0.1, 1.0)  # Boost confidence for reranking
                     logging.info("Applied LLM reranking to semantic results")
                 except Exception as e:
                     logging.warning(f"Semantic reranking failed: {e}")
@@ -1534,7 +1689,7 @@ def main():
             
             search_method = f"Hybrid search ({args.fusion_strategy}, {args.semantic_weight:.1f} semantic + {args.keyword_weight:.1f} keyword, enhancement {enhancement_status}{rerank_suffix}{page_enrichment_info})"
             check_embedding_system()
-            similarities = hybrid_search(
+            search_result = hybrid_search(
                 args.query, 
                 max(args.top_k, 20), 
                 args.pdf,
@@ -1548,10 +1703,16 @@ def main():
                 include_previous_page=args.include_previous_page,
                 include_next_page=args.include_next_page
             )
+            similarities, confidence_score = search_result
         
         logging.info(f"Using {search_method}")
         
-        if not similarities:
+        # Handle tuple results from hybrid search
+        actual_similarities = similarities
+        if isinstance(similarities, tuple):
+            actual_similarities, confidence_score = similarities
+        
+        if not actual_similarities:
             logging.error("No results found. Make sure you've run ingest.py first.")
             sys.exit(1)
         
@@ -1559,7 +1720,10 @@ def main():
         show_text = not args.no_text
         enhanced_analysis = not args.no_analysis
         dual_answer = args.dual_answer and not args.no_dual
-        display_results(similarities, args.query, args.top_k, args.min_similarity, show_text, enhanced_analysis, dual_answer, force_language=args.language)
+        
+        # Pass confidence score to display_results
+        conf_score = confidence_score if 'confidence_score' in locals() else None
+        display_results(actual_similarities, args.query, args.top_k, args.min_similarity, show_text, enhanced_analysis, dual_answer, force_language=args.language, confidence_score=conf_score)
         
     except Exception as e:
         logging.error(f"Query failed: {e}")

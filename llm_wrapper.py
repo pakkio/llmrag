@@ -130,7 +130,13 @@ def generate_embeddings(texts: Union[str, List[str]],
             # OpenAI text-embedding-3-large can handle up to 8191 tokens
             # Roughly 4 chars per token, so ~32k characters max
             if len(cleaned_text) > 32000:
-                cleaned_text = cleaned_text[:32000]
+                # Find last space before 32000 to avoid cutting words in half
+                truncation_point = cleaned_text.rfind(' ', 0, 32000)
+                if truncation_point > 31000:  # Ensure we don't truncate too much (less than 1000 chars lost)
+                    cleaned_text = cleaned_text[:truncation_point]
+                else:
+                    # Fallback to hard truncation if no suitable space found
+                    cleaned_text = cleaned_text[:32000]
                 logging.warning(f"Truncated text from {len(text)} to {len(cleaned_text)} characters")
             
             # Basic text cleaning
