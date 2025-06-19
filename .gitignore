@@ -77,3 +77,9 @@ htmlcov/
 
 # Poetry
 poetry.lock
+
+# Database files (should not be committed)
+chroma_db/
+*.db
+*.sqlite3
+hybrid_search.db
