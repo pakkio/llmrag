@@ -33,7 +33,7 @@ RERANKING_CONFIG = {
     "min_candidates": 8,      # Minimum candidates needed for reranking
     "max_candidates": 25,     # Maximum candidates to send to LLM (cost control)
     "fallback_timeout": 10.0, # Timeout for LLM reranking (seconds)
-    "default_model": "google/gemini-flash-1.5",  # Fast and cost-effective
+    "default_model": os.environ.get("RERANKING_MODEL", "google/gemini-flash-1.5"),  # Fast and cost-effective
     "max_text_length": 300,   # Max text length per candidate in prompt
 }
 

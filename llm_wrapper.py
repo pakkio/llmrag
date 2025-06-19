@@ -153,8 +153,9 @@ def generate_embeddings(texts: Union[str, List[str]],
                 raise Exception("Text is empty after cleaning")
             
             # Generate embedding using OpenAI API
+            embedding_model = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-large")
             response = client.embeddings.create(
-                model="text-embedding-3-large",
+                model=embedding_model,
                 input=cleaned_text,
                 encoding_format="float"
             )
