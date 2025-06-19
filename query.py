@@ -4,7 +4,7 @@ import sys
 import argparse
 import logging
 from pathlib import Path
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 import numpy as np
 import re
 import chromadb
@@ -125,7 +125,7 @@ def generate_query_embedding(query: str) -> np.ndarray:
         logging.error(f"Error generating query embedding: {e}")
         raise
 
-def query_fts5_collections(query: str, top_k: int = 10, pdf_name: str = None, use_enhancement: bool = True) -> List[Tuple[str, int, str, float]]:
+def query_fts5_collections(query: str, top_k: int = 10, pdf_name: str = None, enhancement_mode: str = "full") -> List[Tuple[str, int, str, float]]:
     """
     Query SQLite FTS5 collections for keyword-based matches with optional query enhancement.
     Returns list of (pdf_name, page_number, text_content, bm25_score)
@@ -134,17 +134,30 @@ def query_fts5_collections(query: str, top_k: int = 10, pdf_name: str = None, us
         search_query = query
         
         # Try query enhancement for better keyword matching
-        if use_enhancement:
+        if enhancement_mode != "off":
             try:
-                logging.info(f"Enhancing query: '{query}'")
-                enhancement = enhance_query(query)
+                logging.info(f"Enhancing query with mode '{enhancement_mode}': '{query}'")
+                enhancement = enhance_query_adaptive(query, enhancement_mode)
                 enhanced_query = enhancement.get('enhanced_query', query)
                 translation = enhancement.get('translation', query)
                 synonyms = enhancement.get('synonyms', [])
                 
                 # Create expanded search query with translation and synonyms
-                # FTS5 syntax: use OR without quotes for multi-term queries
-                search_terms = [translation] + synonyms[:3]  # Use translation and top synonyms
+                # Adjust expansion based on enhancement mode
+                if enhancement_mode == "minimal" or (enhancement_mode == "auto" and classify_query_type(query) == "factual"):
+                    # Minimal expansion: translation + 1-2 direct synonyms
+                    search_terms = [translation] + synonyms[:1]
+                    max_terms = 3
+                elif enhancement_mode == "maximum" or (enhancement_mode == "auto" and classify_query_type(query) == "comparative"):
+                    # Maximum expansion: translation + many synonyms + related terms
+                    related_terms = enhancement.get('related_terms', [])
+                    search_terms = [translation] + synonyms[:4] + related_terms[:2]
+                    max_terms = 8
+                else:
+                    # Full/balanced expansion
+                    search_terms = [translation] + synonyms[:3]
+                    max_terms = 5
+                
                 # Clean terms and remove duplicates
                 clean_terms = []
                 for term in search_terms:
@@ -155,7 +168,7 @@ def query_fts5_collections(query: str, top_k: int = 10, pdf_name: str = None, us
                 
                 if clean_terms:
                     # Join terms with spaces - FTS5Manager will handle OR logic internally
-                    search_query = ' '.join(clean_terms[:5])  # Limit to 5 terms to avoid complexity
+                    search_query = ' '.join(clean_terms[:max_terms])
                 else:
                     search_query = query  # Fallback to original
                 
@@ -178,7 +191,7 @@ def query_fts5_collections(query: str, top_k: int = 10, pdf_name: str = None, us
         
         fts5_manager.close()
         
-        logging.info(f"Found {len(results)} FTS5 keyword results (enhanced: {use_enhancement})")
+        logging.info(f"Found {len(results)} FTS5 keyword results (enhancement: {enhancement_mode})")
         
         # Convert to expected format: (pdf_name, page_number, text_content, score)
         formatted_results = []
@@ -191,8 +204,336 @@ def query_fts5_collections(query: str, top_k: int = 10, pdf_name: str = None, us
         logging.error(f"Error querying FTS5 collections: {e}")
         return []
 
+def apply_fusion_strategy(semantic_results: List[Tuple[str, int, str, float]], 
+                         keyword_results: List[Tuple[str, int, str, float]], 
+                         strategy: str, 
+                         semantic_weight: float = 0.6, 
+                         keyword_weight: float = 0.4,
+                         query: str = "") -> List[Tuple[str, int, str, float]]:
+    """
+    Apply different fusion strategies to combine semantic and keyword search results.
+    
+    Args:
+        semantic_results: Results from semantic search
+        keyword_results: Results from keyword search  
+        strategy: Fusion strategy ("weighted", "rrf", "comb_sum", "comb_mnz", "adaptive")
+        semantic_weight: Weight for semantic results (used in weighted strategy)
+        keyword_weight: Weight for keyword results (used in weighted strategy)
+        query: Original query (used in adaptive strategy)
+    
+    Returns:
+        Combined and sorted results
+    """
+    
+    def deduplicate_results(results: List[Tuple[str, int, str, float]]) -> List[Tuple[str, int, str, float]]:
+        """Remove duplicate results, keeping the best score for each unique (pdf, page, chunk) combination"""
+        seen = {}  # (pdf_name, page_number, text_hash) -> best_score
+        unique_results = []
+        
+        for pdf_name, page_number, text, score in results:
+            # Create a simple hash of the text content to identify duplicates
+            text_hash = hash(text.strip()[:100])  # Use first 100 chars for hash
+            key = (pdf_name, page_number, text_hash)
+            
+            if key not in seen or score > seen[key][3]:
+                seen[key] = (pdf_name, page_number, text, score)
+        
+        return list(seen.values())
+
+    def normalize_scores(results: List[Tuple[str, int, str, float]]) -> List[Tuple[str, int, str, float]]:
+        if not results:
+            return []
+        
+        scores = [score for _, _, _, score in results]
+        max_score = max(scores) if scores else 1.0
+        min_score = min(scores) if scores else 0.0
+        
+        # Avoid division by zero
+        if max_score == min_score:
+            return [(pdf, page, text, 0.5) for pdf, page, text, _ in results]
+        
+        normalized = []
+        for pdf, page, text, score in results:
+            # Min-max normalization to [0, 1]
+            norm_score = (score - min_score) / (max_score - min_score)
+            normalized.append((pdf, page, text, norm_score))
+        
+        return normalized
+    
+    # Deduplicate and normalize both result sets
+    semantic_deduped = deduplicate_results(semantic_results)
+    keyword_deduped = deduplicate_results(keyword_results)
+    
+    semantic_normalized = normalize_scores(semantic_deduped)
+    keyword_normalized = normalize_scores(keyword_deduped)
+    
+    # Create unified result mapping
+    all_results = {}  # (pdf_name, page_number, text_snippet) -> result_data
+    
+    # Add semantic results
+    for i, (pdf_name, page_number, text, norm_score) in enumerate(semantic_normalized):
+        key = (pdf_name, page_number, text[:50])
+        all_results[key] = {
+            'text': text,
+            'semantic_score': norm_score,
+            'semantic_rank': i + 1,
+            'keyword_score': 0.0,
+            'keyword_rank': len(keyword_normalized) + 1,  # Worst possible rank
+            'in_both': False
+        }
+    
+    # Add keyword results
+    for i, (pdf_name, page_number, text, norm_score) in enumerate(keyword_normalized):
+        key = (pdf_name, page_number, text[:50])
+        if key in all_results:
+            # Update existing entry
+            all_results[key]['keyword_score'] = norm_score
+            all_results[key]['keyword_rank'] = i + 1
+            all_results[key]['in_both'] = True
+        else:
+            # Create new entry (keyword-only result)
+            all_results[key] = {
+                'text': text,
+                'semantic_score': 0.0,
+                'semantic_rank': len(semantic_normalized) + 1,  # Worst possible rank
+                'keyword_score': norm_score,
+                'keyword_rank': i + 1,
+                'in_both': False
+            }
+    
+    # Apply fusion strategy
+    if strategy == "weighted":
+        # Ensure weights sum to 1.0
+        total_weight = semantic_weight + keyword_weight
+        if total_weight > 0:
+            semantic_weight = semantic_weight / total_weight
+            keyword_weight = keyword_weight / total_weight
+        
+        for key, data in all_results.items():
+            data['final_score'] = semantic_weight * data['semantic_score'] + keyword_weight * data['keyword_score']
+            
+    elif strategy == "rrf":
+        # Reciprocal Rank Fusion (k=60 is standard)
+        k = 60
+        for key, data in all_results.items():
+            rrf_score = (1 / (k + data['semantic_rank'])) + (1 / (k + data['keyword_rank']))
+            data['final_score'] = rrf_score
+            
+    elif strategy == "comb_sum":
+        # Simple sum of normalized scores
+        for key, data in all_results.items():
+            data['final_score'] = data['semantic_score'] + data['keyword_score']
+            
+    elif strategy == "comb_mnz":
+        # CombMNZ: CombSUM * number of systems that returned the document
+        for key, data in all_results.items():
+            systems_count = (1 if data['semantic_score'] > 0 else 0) + (1 if data['keyword_score'] > 0 else 0)
+            data['final_score'] = (data['semantic_score'] + data['keyword_score']) * systems_count
+            
+    elif strategy == "adaptive":
+        # Query-adaptive weighting based on query characteristics
+        def is_factual_query(q: str) -> bool:
+            factual_indicators = ['what', 'who', 'when', 'where', 'define', 'definition', 'meaning']
+            return any(indicator in q.lower() for indicator in factual_indicators)
+        
+        def is_conceptual_query(q: str) -> bool:
+            conceptual_indicators = ['why', 'how', 'explain', 'describe', 'analysis', 'relationship', 'compare']
+            return any(indicator in q.lower() for indicator in conceptual_indicators)
+        
+        if is_factual_query(query):
+            # Favor keyword matching for factual queries
+            adaptive_semantic_weight, adaptive_keyword_weight = 0.3, 0.7
+        elif is_conceptual_query(query):
+            # Favor semantic matching for conceptual queries
+            adaptive_semantic_weight, adaptive_keyword_weight = 0.8, 0.2
+        else:
+            # Default balanced approach
+            adaptive_semantic_weight, adaptive_keyword_weight = 0.6, 0.4
+        
+        for key, data in all_results.items():
+            data['final_score'] = adaptive_semantic_weight * data['semantic_score'] + adaptive_keyword_weight * data['keyword_score']
+    
+    else:
+        # Fallback to weighted if unknown strategy
+        logging.warning(f"Unknown fusion strategy '{strategy}', falling back to weighted")
+        for key, data in all_results.items():
+            data['final_score'] = semantic_weight * data['semantic_score'] + keyword_weight * data['keyword_score']
+    
+    # Convert back to list format and sort by final score
+    final_results = []
+    for (pdf_name, page_number, _), data in all_results.items():
+        final_results.append((pdf_name, page_number, data['text'], data['final_score']))
+    
+    # Sort by final score (highest first)
+    final_results.sort(key=lambda x: x[3], reverse=True)
+    
+    logging.info(f"Fusion strategy '{strategy}': {len(semantic_results)} semantic → {len(semantic_deduped)} deduped")
+    logging.info(f"Fusion strategy '{strategy}': {len(keyword_results)} keyword → {len(keyword_deduped)} deduped")
+    logging.info(f"Final fused results: {len(final_results)} unique combinations")
+    
+    return final_results
+
+def get_full_page_content(pdf_name: str, page_number: int) -> Optional[str]:
+    """
+    Retrieve complete page content by reconstructing all chunks for a given page.
+    
+    Args:
+        pdf_name: Name of the PDF document
+        page_number: Page number to retrieve
+    
+    Returns:
+        Complete page text or None if not found
+    """
+    try:
+        import chromadb
+        client = chromadb.PersistentClient(path="./chroma_db")
+        
+        # Try to get collection (handle both with and without 'pdf_' prefix)
+        collection_name = f"pdf_{pdf_name}"
+        try:
+            collection = client.get_collection(name=collection_name)
+        except:
+            # Try without prefix in case it was stored differently
+            collection = client.get_collection(name=pdf_name)
+        
+        # Get all chunks for this page
+        results = collection.get(
+            include=['documents', 'metadatas'],
+            where={"page_number": page_number}
+        )
+        
+        if not results['documents']:
+            return None
+        
+        # Sort chunks by chunk_id to maintain proper order
+        chunks = []
+        for doc, meta in zip(results['documents'], results['metadatas']):
+            chunk_id = meta.get('chunk_id', 1)
+            # Handle None chunk_id (single-chunk pages)
+            if chunk_id is None:
+                chunk_id = 1
+            chunks.append((chunk_id, doc))
+        
+        # Sort by chunk_id and reconstruct full text
+        chunks.sort(key=lambda x: x[0])
+        full_text = ''.join([chunk[1] for chunk in chunks])
+        
+        return full_text.strip()
+        
+    except Exception as e:
+        logging.warning(f"Failed to retrieve full page content for {pdf_name} page {page_number}: {e}")
+        return None
+
+def enrich_chunks_to_pages(chunk_results: List[Tuple[str, int, str, float]], 
+                          include_previous_page: bool = False,
+                          include_next_page: bool = False,
+                          max_enriched_results: int = 50) -> List[Tuple[str, int, str, float]]:
+    """
+    Expand chunk results to full page content with optional adjacent page context.
+    
+    Args:
+        chunk_results: List of (pdf_name, page_number, chunk_text, score)
+        include_previous_page: Include previous page for additional context
+        include_next_page: Include next page for additional context  
+        max_enriched_results: Maximum number of results to enrich (performance control)
+    
+    Returns:
+        List of (pdf_name, page_number, enriched_page_text, score) with full page content
+    """
+    if not chunk_results:
+        return []
+    
+    logging.info(f"Enriching {min(len(chunk_results), max_enriched_results)} chunk results to full pages")
+    if include_previous_page or include_next_page:
+        context_info = []
+        if include_previous_page:
+            context_info.append("previous page")
+        if include_next_page:
+            context_info.append("next page")
+        logging.info(f"Including {' + '.join(context_info)} for additional context")
+    
+    enriched_results = []
+    page_cache = {}  # Cache to avoid retrieving same page multiple times
+    
+    # Limit processing for performance
+    results_to_process = chunk_results[:max_enriched_results]
+    
+    for pdf_name, page_number, chunk_text, score in results_to_process:
+        page_content_parts = []
+        
+        # Previous page (if requested and page > 1)
+        if include_previous_page and page_number > 1:
+            prev_page_key = (pdf_name, page_number - 1)
+            if prev_page_key not in page_cache:
+                page_cache[prev_page_key] = get_full_page_content(pdf_name, page_number - 1)
+            
+            prev_page_content = page_cache[prev_page_key]
+            if prev_page_content:
+                page_content_parts.append(f"[Previous Page {page_number-1}]\n{prev_page_content}\n")
+        
+        # Current page (always include)
+        current_page_key = (pdf_name, page_number)
+        if current_page_key not in page_cache:
+            page_cache[current_page_key] = get_full_page_content(pdf_name, page_number)
+        
+        current_page_content = page_cache[current_page_key]
+        if current_page_content:
+            page_content_parts.append(f"[Page {page_number}]\n{current_page_content}")
+        else:
+            # Fallback to original chunk if full page retrieval fails
+            page_content_parts.append(f"[Page {page_number} - Chunk Only]\n{chunk_text}")
+        
+        # Next page (if requested)
+        if include_next_page:
+            next_page_key = (pdf_name, page_number + 1)
+            if next_page_key not in page_cache:
+                page_cache[next_page_key] = get_full_page_content(pdf_name, page_number + 1)
+            
+            next_page_content = page_cache[next_page_key]
+            if next_page_content:
+                page_content_parts.append(f"\n[Next Page {page_number+1}]\n{next_page_content}")
+        
+        # Combine all page content
+        enriched_text = "\n".join(page_content_parts)
+        enriched_results.append((pdf_name, page_number, enriched_text, score))
+        
+        logging.debug(f"Enriched {pdf_name} page {page_number}: {len(chunk_text)} chars → {len(enriched_text)} chars")
+    
+    logging.info(f"Page enrichment completed: {len(enriched_results)} results with full page context")
+    return enriched_results
+
+def smart_deduplicate_pages(enriched_results: List[Tuple[str, int, str, float]]) -> List[Tuple[str, int, str, float]]:
+    """
+    Deduplicate results that refer to the same page after enrichment.
+    Keeps the result with the highest score for each unique (pdf_name, page_number) combination.
+    
+    Args:
+        enriched_results: List of (pdf_name, page_number, enriched_text, score)
+    
+    Returns:
+        Deduplicated list with best score per page
+    """
+    if not enriched_results:
+        return []
+    
+    page_map = {}  # (pdf_name, page_number) -> best_result
+    
+    for result in enriched_results:
+        pdf_name, page_number, text, score = result
+        key = (pdf_name, page_number)
+        
+        if key not in page_map or score > page_map[key][3]:
+            page_map[key] = result
+    
+    # Convert back to list and sort by score (highest first)
+    deduplicated_results = list(page_map.values())
+    deduplicated_results.sort(key=lambda x: x[3], reverse=True)
+    
+    logging.info(f"Smart deduplication: {len(enriched_results)} → {len(deduplicated_results)} unique pages")
+    return deduplicated_results
+
 def hybrid_search(query: str, top_k: int = 10, pdf_name: str = None, 
-                 semantic_weight: float = 0.6, bm25_weight: float = 0.4, use_enhancement: bool = True, use_reranking: bool = False, language: str = "auto") -> List[Tuple[str, int, str, float]]:
+                 semantic_weight: float = 0.6, bm25_weight: float = 0.4, enhancement_mode: str = "full", use_reranking: bool = False, language: str = "auto", fusion_strategy: str = "weighted", use_page_enrichment: bool = False, include_previous_page: bool = False, include_next_page: bool = False) -> List[Tuple[str, int, str, float]]:
     """
     Perform hybrid search combining semantic similarity (ChromaDB) and keyword matching (FTS5).
     
@@ -202,9 +543,13 @@ def hybrid_search(query: str, top_k: int = 10, pdf_name: str = None,
         pdf_name: Optional specific PDF to search
         semantic_weight: Weight for semantic search results (default: 0.6)
         bm25_weight: Weight for BM25 keyword search results (default: 0.4)
-        use_enhancement: Whether to use query enhancement (default: True)
+        enhancement_mode: Enhancement mode ("auto", "minimal", "full", "maximum", "off") (default: "full")
         use_reranking: Whether to apply LLM reranking to results (default: False)
         language: Language hint for LLM reranking (default: "auto")
+        fusion_strategy: Strategy for combining results ("weighted", "rrf", "comb_sum", "comb_mnz", "adaptive") (default: "weighted")
+        use_page_enrichment: Whether to expand chunks to full pages (default: False)
+        include_previous_page: Include previous page for additional context (default: False)
+        include_next_page: Include next page for additional context (default: False)
     
     Returns:
         List of (pdf_name, page_number, text_content, combined_score) sorted by combined score
@@ -216,119 +561,72 @@ def hybrid_search(query: str, top_k: int = 10, pdf_name: str = None,
             semantic_weight = semantic_weight / total_weight
             bm25_weight = bm25_weight / total_weight
         
-        logging.info(f"Performing hybrid search with {semantic_weight:.2f} semantic + {bm25_weight:.2f} keyword weighting")
+        logging.info(f"Performing hybrid search with fusion strategy: {fusion_strategy}")
+        if fusion_strategy == "weighted":
+            logging.info(f"Using {semantic_weight:.2f} semantic + {bm25_weight:.2f} keyword weighting")
         
         # Get semantic search results
         query_embedding = generate_query_embedding(query)
         semantic_results = query_chroma_collections(query_embedding, top_k * 2, pdf_name)
         
         # Get keyword search results with enhancement
-        keyword_results = query_fts5_collections(query, top_k * 2, pdf_name, use_enhancement=use_enhancement)
+        keyword_results = query_fts5_collections(query, top_k * 2, pdf_name, enhancement_mode=enhancement_mode)
         
-        # Remove duplicates and normalize scores for fair combination
-        def deduplicate_results(results: List[Tuple[str, int, str, float]]) -> List[Tuple[str, int, str, float]]:
-            """Remove duplicate results, keeping the best score for each unique (pdf, page, chunk) combination"""
-            seen = {}  # (pdf_name, page_number, text_hash) -> best_score
-            unique_results = []
-            
-            for pdf_name, page_number, text, score in results:
-                # Create a simple hash of the text content to identify duplicates
-                text_hash = hash(text.strip()[:100])  # Use first 100 chars for hash
-                key = (pdf_name, page_number, text_hash)
-                
-                if key not in seen or score > seen[key][3]:
-                    seen[key] = (pdf_name, page_number, text, score)
-            
-            return list(seen.values())
-
-        def normalize_scores(results: List[Tuple[str, int, str, float]]) -> List[Tuple[str, int, str, float]]:
-            if not results:
-                return []
-            
-            scores = [score for _, _, _, score in results]
-            max_score = max(scores) if scores else 1.0
-            min_score = min(scores) if scores else 0.0
-            
-            # Avoid division by zero
-            if max_score == min_score:
-                return [(pdf, page, text, 0.5) for pdf, page, text, _ in results]
-            
-            normalized = []
-            for pdf, page, text, score in results:
-                # Min-max normalization to [0, 1]
-                norm_score = (score - min_score) / (max_score - min_score)
-                normalized.append((pdf, page, text, norm_score))
-            
-            return normalized
-        
-        # Deduplicate and normalize both result sets
-        semantic_deduped = deduplicate_results(semantic_results)
-        keyword_deduped = deduplicate_results(keyword_results)
-        
-        semantic_normalized = normalize_scores(semantic_deduped)
-        keyword_normalized = normalize_scores(keyword_deduped)
-        
-        # Combine results using weighted scoring
-        combined_scores = {}  # (pdf_name, page_number, text_snippet) -> combined_score
-        
-        # Add semantic scores
-        for pdf_name, page_number, text, norm_score in semantic_normalized:
-            key = (pdf_name, page_number, text[:50])  # Use text snippet as part of key
-            combined_scores[key] = {
-                'text': text,
-                'semantic_score': norm_score,
-                'keyword_score': 0.0,
-                'combined_score': semantic_weight * norm_score
-            }
-        
-        # Add keyword scores
-        for pdf_name, page_number, text, norm_score in keyword_normalized:
-            key = (pdf_name, page_number, text[:50])
-            if key in combined_scores:
-                # Update existing entry
-                combined_scores[key]['keyword_score'] = norm_score
-                combined_scores[key]['combined_score'] += bm25_weight * norm_score
-            else:
-                # Create new entry (keyword-only result)
-                combined_scores[key] = {
-                    'text': text,
-                    'semantic_score': 0.0,
-                    'keyword_score': norm_score,
-                    'combined_score': bm25_weight * norm_score
-                }
-        
-        # Convert back to list format and sort by combined score
-        hybrid_results = []
-        for (pdf_name, page_number, _), scores_data in combined_scores.items():
-            hybrid_results.append((pdf_name, page_number, scores_data['text'], scores_data['combined_score']))
-        
-        # Sort by combined score (highest first)
-        hybrid_results.sort(key=lambda x: x[3], reverse=True)
-        
-        logging.info(f"Hybrid search: {len(semantic_results)} semantic → {len(semantic_deduped)} deduped")
-        logging.info(f"Hybrid search: {len(keyword_results)} keyword → {len(keyword_deduped)} deduped")
-        logging.info(f"Final hybrid results: {len(hybrid_results)} unique combinations")
+        # Apply fusion strategy to combine results
+        hybrid_results = apply_fusion_strategy(
+            semantic_results=semantic_results,
+            keyword_results=keyword_results,
+            strategy=fusion_strategy,
+            semantic_weight=semantic_weight,
+            keyword_weight=bm25_weight,
+            query=query
+        )
         
         if hybrid_results and logging.getLogger().isEnabledFor(logging.DEBUG):
             logging.debug("Top 3 hybrid scores:")
             for i, (pdf, page, text, score) in enumerate(hybrid_results[:3]):
                 logging.debug(f"  {i+1}. {pdf} p.{page}: {score:.4f} - {text[:50]}...")
         
-        # Apply LLM reranking if requested and we have enough candidates
-        if use_reranking and len(hybrid_results) >= 8:
+        # Page enrichment pipeline (expand chunks to full pages)
+        if use_page_enrichment:
             try:
-                logging.info(f"Applying LLM reranking to {len(hybrid_results)} hybrid results")
+                # Step 4: Enrich chunks to full pages (with optional adjacent pages)
+                logging.info("Starting page enrichment pipeline")
+                enriched_results = enrich_chunks_to_pages(
+                    chunk_results=hybrid_results,
+                    include_previous_page=include_previous_page,
+                    include_next_page=include_next_page,
+                    max_enriched_results=50  # Limit for performance
+                )
+                
+                # Step 5: Smart deduplication (remove duplicate pages, keep best score)
+                final_results = smart_deduplicate_pages(enriched_results)
+                
+                # Use enriched results for reranking and final output
+                results_for_processing = final_results
+                logging.info(f"Page enrichment pipeline completed: {len(hybrid_results)} chunks → {len(final_results)} enriched pages")
+            except Exception as e:
+                logging.warning(f"Page enrichment failed, using original chunk results: {e}")
+                results_for_processing = hybrid_results
+        else:
+            results_for_processing = hybrid_results
+        
+        # Step 6: Apply LLM reranking if requested and we have enough candidates
+        if use_reranking and len(results_for_processing) >= 8:
+            try:
+                context_info = " with enriched pages" if use_page_enrichment else " with chunks"
+                logging.info(f"Applying LLM reranking to {len(results_for_processing)} hybrid results{context_info}")
                 reranked_results = llm_rerank_results(
                     query=query,
-                    candidates=hybrid_results[:25],  # Limit to 25 for cost control
+                    candidates=results_for_processing[:25],  # Limit to 25 for cost control
                     language=language
                 )
                 logging.info("LLM reranking completed successfully")
                 return reranked_results[:top_k]
             except Exception as e:
-                logging.warning(f"LLM reranking failed, using hybrid scores: {e}")
+                logging.warning(f"LLM reranking failed, using fusion scores: {e}")
         
-        return hybrid_results[:top_k]
+        return results_for_processing[:top_k]
         
     except Exception as e:
         logging.error(f"Error in hybrid search: {e}")
@@ -361,17 +659,134 @@ Respond with only one word: the language name (e.g., "Italian", "English", "Fren
         return language.strip().lower()
     return "english"  # fallback
 
-def enhance_query(original_query: str, target_language: str = "english") -> dict:
+def classify_query_type(query: str) -> str:
+    """
+    Classify query type for adaptive enhancement.
+    
+    Args:
+        query: The search query text
+    
+    Returns:
+        Query type: "factual", "conceptual", "comparative", or "default"
+    """
+    query_lower = query.lower()
+    
+    # Factual patterns (need minimal enhancement - direct answers)
+    factual_patterns = [
+        r'\bquanto\b', r'\bquando\b', r'\bdove\b', r'\bchi\b', r'\bche\s+distanza\b',
+        r'\bche\s+dimensioni?\b', r'\bche\s+grandezza\b', r'\bche\s+misura\b',
+        r'\bhow\s+big\b', r'\bhow\s+far\b', r'\bhow\s+many\b', r'\bwhat\s+is\s+the\s+size\b',
+        r'\bwhen\s+did\b', r'\bwhere\s+is\b', r'\bwho\s+was\b', r'\bwhat\s+year\b'
+    ]
+    
+    # Comparative patterns (need maximum enhancement - relationships and contrasts)
+    comparative_patterns = [
+        r'\bdifferenza\b', r'\bconfronto\b', r'\brelazione\b', r'\bparagonare\b',
+        r'\bversus\b', r'\bvs\b', r'\bdifference\b', r'\bcompare\b', r'\bcompared\s+to\b',
+        r'\bbetween\b.*\band\b', r'\brather\s+than\b', r'\binstead\s+of\b'
+    ]
+    
+    # Conceptual patterns (need full enhancement - complex explanations)
+    conceptual_patterns = [
+        r'\bcos[\'è]\b', r'\bcome\b', r'\bperch[eé]\b', r'\bspiegare?\b',
+        r'\bwhat\s+is\b', r'\bhow\s+does\b', r'\bwhy\s+does\b', r'\bexplain\b',
+        r'\bdescribe\b', r'\btell\s+me\s+about\b', r'\bwhat\s+are\b'
+    ]
+    
+    # Check patterns in order of specificity
+    if any(re.search(pattern, query_lower) for pattern in factual_patterns):
+        return "factual"
+    elif any(re.search(pattern, query_lower) for pattern in comparative_patterns):
+        return "comparative"
+    elif any(re.search(pattern, query_lower) for pattern in conceptual_patterns):
+        return "conceptual"
+    
+    return "default"
+
+def enhance_query_adaptive(original_query: str, enhancement_mode: str = "full") -> dict:
+    """
+    Enhance query with adaptive expansion based on query type or explicit mode.
+    
+    Args:
+        original_query: The original search query
+        enhancement_mode: "auto", "minimal", "full", "maximum", or "off"
+    
+    Returns:
+        dict with enhanced_query, translations, synonyms, and related_terms
+    """
+    if enhancement_mode == "off":
+        return {
+            "original_query": original_query,
+            "detected_language": "unknown",
+            "translation": original_query,
+            "enhanced_query": original_query,
+            "synonyms": [],
+            "related_terms": [],
+            "search_strategy": "enhancement disabled"
+        }
+    
+    # Determine enhancement level
+    if enhancement_mode == "auto":
+        query_type = classify_query_type(original_query)
+        if query_type == "factual":
+            enhancement_level = "minimal"
+        elif query_type == "comparative":
+            enhancement_level = "maximum"
+        elif query_type == "conceptual":
+            enhancement_level = "full"
+        else:
+            enhancement_level = "full"  # default
+        
+        logging.info(f"Auto-detected query type: '{query_type}' → using '{enhancement_level}' enhancement")
+    else:
+        enhancement_level = enhancement_mode
+        logging.info(f"Using explicit enhancement level: '{enhancement_level}'")
+    
+    # Create enhancement instructions based on level
+    if enhancement_level == "minimal":
+        enhancement_instruction = """Focus on MINIMAL enhancement:
+- Translate to English if needed
+- Add only direct synonyms (1-2 terms max)
+- Avoid expanding scope or adding conceptual terms
+- Keep the query focused and precise"""
+        
+    elif enhancement_level == "maximum":
+        enhancement_instruction = """Focus on MAXIMUM enhancement:
+- Translate to English if needed
+- Add extensive synonyms and alternative phrasings
+- Include related concepts and comparative terms
+- Add domain-specific terminology
+- Expand to capture relationships and contrasts"""
+        
+    else:  # "full" or default
+        enhancement_instruction = """Focus on BALANCED enhancement:
+- Translate to English if needed
+- Add relevant synonyms and related terms
+- Include conceptually related vocabulary
+- Maintain focus while expanding search potential"""
+    
+    return enhance_query(original_query, enhancement_instruction)
+
+def enhance_query(original_query: str, enhancement_instruction: str = None) -> dict:
     """
     Enhance and translate query using LLM for better search performance.
     
     Args:
         original_query: The original search query
-        target_language: Target language for translation (default: english)
+        enhancement_instruction: Specific instructions for enhancement level
     
     Returns:
         dict with enhanced_query, translations, synonyms, and related_terms
     """
+    
+    # Default enhancement instruction if none provided
+    if enhancement_instruction is None:
+        enhancement_instruction = """Focus on BALANCED enhancement:
+- Translate to English if needed
+- Add relevant synonyms and related terms
+- Include conceptually related vocabulary
+- Maintain focus while expanding search potential"""
+    
     messages = [
         {
             "role": "user",
@@ -379,27 +794,30 @@ def enhance_query(original_query: str, target_language: str = "english") -> dict
 
 Original Query: "{original_query}"
 
+Enhancement Level Instructions:
+{enhancement_instruction}
+
 Please provide:
 1. TRANSLATION: If the query is not in English, translate it to English
-2. ENHANCED_QUERY: Improve the query by adding relevant terms, synonyms, and alternative phrasings
-3. SYNONYMS: List alternative terms and synonyms that could be used
-4. RELATED_TERMS: Add conceptually related terms that might appear in relevant documents
+2. ENHANCED_QUERY: Improve the query according to the enhancement level instructions
+3. SYNONYMS: List alternative terms and synonyms (adjust quantity based on enhancement level)
+4. RELATED_TERMS: Add conceptually related terms (adjust scope based on enhancement level)
 
 Format your response as JSON:
 {{
     "original_query": "{original_query}",
     "detected_language": "language_name",
     "translation": "english translation if needed",
-    "enhanced_query": "improved searchable version with multiple terms",
+    "enhanced_query": "improved searchable version with appropriate expansion",
     "synonyms": ["synonym1", "synonym2", "synonym3"],
     "related_terms": ["related1", "related2", "related3"],
     "search_strategy": "brief explanation of enhancement approach"
 }}
 
-Examples:
-- "Nettuno" → enhance with "Neptune planet solar system eighth gas giant blue methane atmosphere"
-- "strategie di marketing" → enhance with "marketing strategies business promotional tactics advertising campaigns"
-- "machine learning" → enhance with "artificial intelligence AI neural networks deep learning algorithms"
+Examples by enhancement level:
+MINIMAL: "Quanto è grande il Sole?" → "How big Sun? size"
+FULL: "Cos'è una supernova?" → "What supernova? stellar explosion massive star core collapse"
+MAXIMUM: "Differenza tra pianeta e stella" → "Difference planet star? celestial bodies stellar objects planetary formation stellar evolution mass composition"
 
 Focus on terms that would likely appear in academic, technical, or reference documents."""
         }
@@ -997,6 +1415,9 @@ def main():
                        help='Weight for semantic search in hybrid mode (default: 0.6)')
     parser.add_argument('--keyword-weight', type=float, default=0.4,
                        help='Weight for keyword search in hybrid mode (default: 0.4)')
+    parser.add_argument('--fusion-strategy', type=str, default='weighted',
+                       choices=['weighted', 'rrf', 'comb_sum', 'comb_mnz', 'adaptive'],
+                       help='Fusion strategy for combining semantic and keyword results (default: weighted)')
     
     # Display options
     parser.add_argument('--no-text', action='store_true', 
@@ -1011,10 +1432,24 @@ def main():
                        help='List available PDF collections and exit')
     parser.add_argument('--language', type=str, default=None,
                        help='Force response language (italian, spanish, french, english). Default: auto-detect')
-    parser.add_argument('--no-enhancement', action='store_true',
-                       help='Disable query enhancement (translation and expansion). Enhancement enabled by default')
+    # Enhancement options (mutually exclusive group)
+    enhancement_group = parser.add_mutually_exclusive_group()
+    enhancement_group.add_argument('--enhancement', type=str, default='auto',
+                       choices=['auto', 'minimal', 'full', 'maximum', 'off'],
+                       help='Enhancement mode: auto (adaptive based on query type), minimal (factual queries), full (balanced), maximum (comparative queries), off (disabled). Default: auto')
+    enhancement_group.add_argument('--no-enhancement', action='store_true',
+                       help='Disable query enhancement (equivalent to --enhancement=off)')
     parser.add_argument('--rerank', action='store_true',
                        help='Enable LLM reranking for improved result quality (~2s with Gemini Flash 1.5)')
+    
+    # Page enrichment options
+    parser.add_argument('--enrich-pages', action='store_true',
+                       help='Expand chunk results to full page content for better context and reranking')
+    parser.add_argument('--include-previous-page', action='store_true',
+                       help='Include previous page content for additional narrative context (requires --enrich-pages)')
+    parser.add_argument('--include-next-page', action='store_true',
+                       help='Include next page content for additional narrative context (requires --enrich-pages)')
+    
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose logging')
     
     args = parser.parse_args()
@@ -1045,9 +1480,13 @@ def main():
         parser.error("Query text is required unless using --list")
     
     try:
-        # Determine enhancement setting
-        use_enhancement = not args.no_enhancement
-        enhancement_status = "enabled" if use_enhancement else "disabled"
+        # Determine enhancement mode
+        if args.no_enhancement:
+            enhancement_mode = "off"
+        else:
+            enhancement_mode = args.enhancement
+        
+        enhancement_status = f"mode: {enhancement_mode}"
         
         # Determine search method
         if args.bm25:
@@ -1056,7 +1495,7 @@ def main():
             # Only check embedding system if needed for analysis features
             if not args.no_analysis:
                 check_embedding_system()
-            similarities = query_fts5_collections(args.query, max(args.top_k, 20), args.pdf, use_enhancement=use_enhancement)
+            similarities = query_fts5_collections(args.query, max(args.top_k, 20), args.pdf, enhancement_mode=enhancement_mode)
             
             # Apply reranking to BM25 results if requested
             if args.rerank and len(similarities) >= 8:
@@ -1082,7 +1521,18 @@ def main():
         else:
             # Default to hybrid search
             rerank_suffix = " + reranking" if args.rerank else ""
-            search_method = f"Hybrid search ({args.semantic_weight:.1f} semantic + {args.keyword_weight:.1f} keyword, enhancement {enhancement_status}{rerank_suffix})"
+            page_enrichment_info = ""
+            if args.enrich_pages:
+                page_enrichment_info = " + page enrichment"
+                if args.include_previous_page or args.include_next_page:
+                    adjacent_pages = []
+                    if args.include_previous_page:
+                        adjacent_pages.append("prev")
+                    if args.include_next_page:
+                        adjacent_pages.append("next")
+                    page_enrichment_info += f" ({'+'.join(adjacent_pages)})"
+            
+            search_method = f"Hybrid search ({args.fusion_strategy}, {args.semantic_weight:.1f} semantic + {args.keyword_weight:.1f} keyword, enhancement {enhancement_status}{rerank_suffix}{page_enrichment_info})"
             check_embedding_system()
             similarities = hybrid_search(
                 args.query, 
@@ -1090,9 +1540,13 @@ def main():
                 args.pdf,
                 args.semantic_weight,
                 args.keyword_weight,
-                use_enhancement=use_enhancement,
+                enhancement_mode=enhancement_mode,
                 use_reranking=args.rerank,
-                language=args.language or "auto"
+                language=args.language or "auto",
+                fusion_strategy=args.fusion_strategy,
+                use_page_enrichment=args.enrich_pages,
+                include_previous_page=args.include_previous_page,
+                include_next_page=args.include_next_page
             )
         
         logging.info(f"Using {search_method}")

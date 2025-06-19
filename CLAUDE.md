@@ -9,6 +9,7 @@ This is an advanced LLM RAG (Large Language Model - Retrieval Augmented Generati
 - **Semantic Search**: OpenAI text-embedding-3-large (3072 dimensions) with ChromaDB
 - **Keyword Search**: SQLite FTS5 with BM25 ranking and Porter stemming
 - **Hybrid Search**: Intelligent combination with configurable weighting (default: 60% semantic + 40% keyword)
+- **Adaptive Query Enhancement**: AI-powered query classification and enhancement calibration
 - **LLM Reranking**: Gemini Flash 1.5 for intelligent result reordering (~2s)
 - **LLM Analysis**: OpenRouter API (configurable models)
 - **PDF Processing**: PyMuPDF for text extraction
@@ -327,18 +328,44 @@ Strategy: Core term + related AI/ML terminology
 Results: Broader coverage of technical documents
 ```
 
+### **Adaptive Enhancement System (NEW)**
+The system now automatically classifies queries and adapts enhancement levels:
+
+**Query Classification Types**:
+1. **Factual Queries**: "quanto", "quando", "dove", "how big", "when did" → **Minimal Enhancement**
+   - Example: "Quanto è grande il Sole?" → "How big Sun? size" 
+   - Strategy: Translation + 1-2 direct synonyms only
+   
+2. **Conceptual Queries**: "cos'è", "come", "perché", "what is", "how does" → **Full Enhancement**
+   - Example: "Cos'è una supernova?" → "What supernova? stellar explosion massive star core collapse"
+   - Strategy: Balanced expansion with relevant terminology
+   
+3. **Comparative Queries**: "differenza", "confronto", "versus", "compare" → **Maximum Enhancement**
+   - Example: "Differenza tra pianeta e stella" → "Difference planet star? celestial bodies stellar objects formation"
+   - Strategy: Extensive synonyms + related concepts + domain terminology
+
+**Enhancement Modes**:
+- **`--enhancement=auto`** (default): Automatic classification and calibration
+- **`--enhancement=minimal`**: Factual queries optimization
+- **`--enhancement=full`**: Balanced enhancement (previous default)
+- **`--enhancement=maximum`**: Comparative queries optimization
+- **`--enhancement=off`**: Disable enhancement completely
+
 ### **Enhancement Process**
-1. **Language Detection**: Identifies non-English queries
-2. **Translation**: Converts to English for document matching
-3. **Term Expansion**: Adds synonyms and related vocabulary
-4. **Context Addition**: Includes domain-specific terminology
-5. **Fallback Protection**: Uses original if enhancement fails
+1. **Query Classification**: AI-powered analysis of query type and intent
+2. **Adaptive Calibration**: Enhancement level adjusted based on query characteristics
+3. **Language Detection**: Identifies non-English queries
+4. **Translation**: Converts to English for document matching
+5. **Smart Expansion**: Term expansion calibrated to query type
+6. **Context Addition**: Includes domain-specific terminology as appropriate
+7. **Fallback Protection**: Uses original if enhancement fails
 
 ### **Performance Impact**
 - **Translation Speed**: ~1-2 seconds per query
 - **Success Rate**: >95% for supported languages
 - **Recall Improvement**: 2-10x more relevant results
 - **Precision Maintained**: Smart term selection preserves relevance
+- **Adaptive Efficiency**: Right-sized enhancement reduces noise for factual queries
 
 ## Performance Characteristics
 
@@ -397,11 +424,22 @@ python query.py "search query" --semantic-weight 0.8 --keyword-weight 0.2 -v
 # Force Italian responses
 python query.py "search query" --language italian -v
 
-# Query enhancement examples (automatic translation and expansion)
+# Adaptive query enhancement (NEW - automatic classification and calibration)
+python query.py "Quanto è grande il Sole?" --enhancement=auto -v      # Factual → minimal enhancement
+python query.py "Cos'è una supernova?" --enhancement=auto -v          # Conceptual → full enhancement  
+python query.py "Differenza tra pianeta e stella" --enhancement=auto -v # Comparative → maximum enhancement
+
+# Manual enhancement control
+python query.py "search query" --enhancement=minimal -v   # Factual optimization
+python query.py "search query" --enhancement=full -v      # Balanced (previous default)
+python query.py "search query" --enhancement=maximum -v   # Comparative optimization
+python query.py "search query" --enhancement=off -v       # Disable enhancement
+
+# Legacy query enhancement examples (automatic translation and expansion)
 python query.py "Nettuno" --bm25 -v  # → Enhanced to "Neptune planet eighth planet"
 python query.py "strategie di marketing" --hybrid -v  # → Enhanced with related terms
 
-# Disable query enhancement for exact term matching
+# Disable query enhancement for exact term matching (legacy)
 python query.py "machine learning" --bm25 --no-enhancement -v
 
 # List collections
@@ -523,7 +561,16 @@ The system is now completely clean of legacy code and ready for production use w
 - **Professional Presentation**: Color-coded sections and responsive design
 - **Dual-Database Architecture**: ChromaDB for embeddings + SQLite FTS5 for keywords
 
-### **Recent Major Enhancement - Intelligent Query Processing**: 
+### **Latest Enhancement - Adaptive Query Intelligence (NEW)**: 
+- **Adaptive Enhancement System**: AI-powered query classification with automatic enhancement calibration
+- **Query Type Detection**: Factual, conceptual, and comparative query classification using pattern matching
+- **Smart Enhancement Levels**: Minimal, full, and maximum enhancement modes tailored to query types
+- **Automatic Calibration**: `--enhancement=auto` (default) automatically selects optimal enhancement level
+- **Manual Override**: Full control with `--enhancement=minimal|full|maximum|off` options
+- **Intelligent Trade-offs**: Right-sized enhancement reduces noise for factual queries while maximizing recall for complex queries
+- **Backward Compatibility**: Legacy `--no-enhancement` flag continues to work
+
+### **Previous Major Enhancement - Intelligent Query Processing**: 
 - **Query Enhancement System**: AI-powered translation and term expansion using LLM
 - **Cross-Language Search**: Search English documents using Italian, Spanish, French queries
 - **Automatic Term Expansion**: Adds synonyms and related terminology for better recall
@@ -545,12 +592,14 @@ The system is now completely clean of legacy code and ready for production use w
 - **Smart Page Detection**: Automatic identification of summary/overview pages based on content analysis
 - **Web Interface Optimization**: Professional Gradio interface with rich highlighting and multi-level analysis
 
-The system now provides **best-in-class retrieval performance** by combining LLM reranking, AI-powered query enhancement, the conceptual understanding of semantic search, and the precision of keyword matching. The intelligent query processing and content-aware reranking enable seamless cross-language search, automatic term expansion, dramatically improved recall, and significantly enhanced result quality while maintaining clean architecture and comprehensive error handling.
+The system now provides **best-in-class retrieval performance** by combining adaptive query intelligence, LLM reranking, AI-powered query enhancement, the conceptual understanding of semantic search, and the precision of keyword matching. The intelligent query processing, automatic enhancement calibration, and content-aware reranking enable seamless cross-language search, optimal enhancement levels, dramatically improved recall, and significantly enhanced result quality while maintaining clean architecture and comprehensive error handling.
 
 **Key Performance Improvements**:
+- **Adaptive Intelligence**: Automatic query classification and enhancement calibration for optimal results
 - **Intelligent Reranking**: LLM evaluates content relevance for optimal result ordering
 - **Quality Over Quantity**: Mathematical similarity + content understanding for superior results
+- **Smart Enhancement**: Right-sized enhancement reduces noise for factual queries, maximizes recall for complex queries
 - **Cross-Language Search**: Query "Nettuno" (Italian) → Find "Neptune" (English documents)
 - **Zero to Hero**: Queries that previously returned 0 results now return 20+ relevant matches
 - **Enhanced Recall**: 2-10x improvement in finding relevant documents
-- **Improved Precision**: LLM reranking + smart term selection optimizes result quality
+- **Improved Precision**: LLM reranking + smart term selection + adaptive enhancement optimizes result quality

@@ -9,7 +9,7 @@ A powerful Retrieval-Augmented Generation (RAG) system that processes PDF docume
 - **Semantic Search**: OpenAI embeddings using text-embedding-3-large for conceptual understanding
 - **Keyword Search**: SQLite FTS5 with BM25-style ranking for exact term matching
 - **Configurable Weights**: Customize semantic/keyword balance for optimal results
-- **Query Enhancement**: AI-powered translation and expansion of search terms for better results
+- **Adaptive Query Enhancement**: AI-powered query classification with automatic enhancement calibration
 
 ### **🌐 Multilingual Intelligence**
 - **Auto-Detection**: Intelligent language identification from document content
@@ -114,7 +114,8 @@ python query.py "your search query"
 - `-k, --top-k N`: Number of results to show (default: 3)
 - `-s, --min-similarity FLOAT`: Minimum similarity threshold (default: 0.0)
 - `--language LANG`: Force response language (italian, spanish, french, english, default: auto-detect)
-- `--no-enhancement`: Disable intelligent query enhancement (translation and expansion, enabled by default)
+- `--enhancement MODE`: Enhancement mode (auto, minimal, full, maximum, off, default: auto)
+- `--no-enhancement`: Legacy flag to disable enhancement (equivalent to --enhancement=off)
 - `--no-text`: Hide text content
 - `--no-analysis`: Disable LLM analysis
 - `--list`: List available PDF collections
@@ -155,11 +156,22 @@ python query.py "strategie di marketing" --language italian
 # Force English responses for multilingual documents
 python query.py "análisis de mercado" --language english
 
-# Query enhancement examples (automatic translation and expansion)
+# Adaptive query enhancement (NEW - automatic classification and calibration)
+python query.py "Quanto è grande il Sole?" --enhancement=auto      # Factual → minimal enhancement
+python query.py "Cos'è una supernova?" --enhancement=auto          # Conceptual → full enhancement  
+python query.py "Differenza tra pianeta e stella" --enhancement=auto # Comparative → maximum enhancement
+
+# Manual enhancement control
+python query.py "search query" --enhancement=minimal   # Factual optimization
+python query.py "search query" --enhancement=full      # Balanced (previous default)
+python query.py "search query" --enhancement=maximum   # Comparative optimization
+python query.py "search query" --enhancement=off       # Disable enhancement
+
+# Legacy query enhancement examples (automatic translation and expansion)
 python query.py "Nettuno" --bm25  # → Enhanced to "Neptune planet eighth planet"
 python query.py "strategie di marketing" --hybrid  # → Enhanced to include "marketing strategies business promotional"
 
-# Disable query enhancement for exact term matching
+# Disable query enhancement for exact term matching (legacy)
 python query.py "machine learning" --bm25 --no-enhancement
 ```
 
@@ -318,39 +330,52 @@ python query.py "business strategy" --language italian  # → Italian responses
 python query.py "estrategia empresarial" --language english  # → English responses
 ```
 
-### Intelligent Query Enhancement
+### Adaptive Query Enhancement (NEW)
 
-**Automatic Translation + Term Expansion**:
-The system automatically enhances search queries using LLM analysis to improve search results:
+**Intelligent Query Classification + Automatic Enhancement Calibration**:
+The system now automatically classifies queries and adapts enhancement levels for optimal results:
 
-**Translation Process**:
-- **Language Detection**: Automatically identifies non-English queries
-- **Translation**: Converts to English for document matching
-- **Synonym Addition**: Adds relevant synonyms and related terms
-- **Context Expansion**: Includes conceptually related terminology
+**Query Classification Types**:
+1. **Factual Queries**: "quanto", "quando", "dove", "how big", "when did" → **Minimal Enhancement**
+   - Example: "Quanto è grande il Sole?" → "How big Sun? size" 
+   - Strategy: Translation + 1-2 direct synonyms only
+   
+2. **Conceptual Queries**: "cos'è", "come", "perché", "what is", "how does" → **Full Enhancement**
+   - Example: "Cos'è una supernova?" → "What supernova? stellar explosion massive star core collapse"
+   - Strategy: Balanced expansion with relevant terminology
+   
+3. **Comparative Queries**: "differenza", "confronto", "versus", "compare" → **Maximum Enhancement**
+   - Example: "Differenza tra pianeta e stella" → "Difference planet star? celestial bodies stellar objects formation"
+   - Strategy: Extensive synonyms + related concepts + domain terminology
 
-**Enhancement Examples**:
-```bash
-# Italian → English with expansion
-"Nettuno" → "Neptune planet eighth planet"
+**Enhancement Modes**:
+- **`--enhancement=auto`** (default): Automatic classification and calibration
+- **`--enhancement=minimal`**: Factual queries optimization  
+- **`--enhancement=full`**: Balanced enhancement (previous default)
+- **`--enhancement=maximum`**: Comparative queries optimization
+- **`--enhancement=off`**: Disable enhancement completely
 
-# Spanish business term → English expansion  
-"estrategias de marketing" → "marketing strategies business promotional tactics"
-
-# Technical term expansion
-"machine learning" → "artificial intelligence AI neural networks algorithms"
-```
+**Adaptive Process**:
+1. **Query Classification**: AI-powered analysis of query type and intent
+2. **Adaptive Calibration**: Enhancement level adjusted based on query characteristics
+3. **Language Detection**: Identifies non-English queries
+4. **Translation**: Converts to English for document matching
+5. **Smart Expansion**: Term expansion calibrated to query type
+6. **Context Addition**: Includes domain-specific terminology as appropriate
+7. **Fallback Protection**: Uses original if enhancement fails
 
 **Benefits**:
+- **Intelligent Trade-offs**: Right-sized enhancement reduces noise for factual queries while maximizing recall for complex queries
 - **Cross-Language Search**: Find English documents using non-English queries
-- **Better Recall**: Enhanced terms find more relevant results
-- **Domain Awareness**: Adds field-specific terminology automatically
-- **Fallback Protection**: Original query used if enhancement fails
+- **Adaptive Efficiency**: Optimal enhancement level automatically selected
+- **Better Precision**: LLM-guided term selection preserves relevance
+- **Domain Awareness**: Adds field-specific terminology when appropriate
+- **Backward Compatibility**: Legacy `--no-enhancement` flag continues to work
 
 **Control Options**:
-- **Default**: Enhancement enabled for better results
-- **Disable**: Use `--no-enhancement` for exact term matching
-- **Semantic Mode**: Enhancement doesn't affect semantic search (embeddings handle similarity automatically)
+- **Default**: `--enhancement=auto` for intelligent adaptation
+- **Manual Override**: Use specific modes when you know the query type
+- **Legacy Support**: `--no-enhancement` still works for exact term matching
 
 ### Similarity Scoring
 
