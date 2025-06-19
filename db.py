@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 import chromadb
 from datetime import datetime
+from sqlite_fts5 import SQLiteFTS5Manager
 
 def setup_logging():
     """Configure logging"""
@@ -263,33 +264,23 @@ def verify_collection(client, collection_name: str):
         sys.exit(1)
 
 def list_collections(client):
-    """List all PDF collections in the database"""
+    """List all PDF collections in the database, including those only in BM25/FTS5"""
     try:
         collections = client.list_collections()
         pdf_collections = [col for col in collections if col.name.startswith('pdf_')]
-        
-        if not pdf_collections:
-            print("No PDF collections found in database.")
-            return
-        
-        print(f"\nFound {len(pdf_collections)} PDF collection(s):")
+        chroma_names = set(col.name for col in pdf_collections)
+        print(f"\nFound {len(pdf_collections)} PDF collection(s) in ChromaDB:")
         print("-" * 100)
         print(f"{'#':<3} {'Collection Name':<25} {'Documents':<10} {'Pages':<15} {'Source File':<40}")
         print("-" * 100)
-        
         for idx, collection in enumerate(pdf_collections, 1):
             collection_name = collection.name
             count = collection.count()
-            
-            # Try to get source file from metadata
             metadata = collection.metadata
             source_file = metadata.get('source', 'Unknown') if metadata else 'Unknown'
-            
-            # Get page range information
             page_info = "Unknown"
             if count > 0:
                 try:
-                    # Get sample to determine page range
                     results = collection.get(limit=count, include=['metadatas'])
                     if results and results['metadatas']:
                         pages = [m.get('page_number', 0) for m in results['metadatas'] if m.get('page_number')]
@@ -303,16 +294,27 @@ def list_collections(client):
                                 page_info = f"{min_page}-{max_page} ({unique_pages} unique)"
                 except:
                     page_info = "Error reading"
-            
-            # Clean up the display name (remove pdf_ prefix if present)
-            display_name = collection_name
-            if collection_name.startswith('pdf_'):
-                display_name = collection_name[4:].replace('_', ' ')
-            
+            display_name = collection_name[4:].replace('_', ' ') if collection_name.startswith('pdf_') else collection_name
             print(f"{idx:<3} {display_name:<25} {count:<10} {page_info:<15} {Path(source_file).name:<40}")
-        
-        print("-" * 100)
-        
+        # --- Now check FTS5/BM25 for orphaned collections ---
+        fts5_manager = SQLiteFTS5Manager()
+        try:
+            cur = fts5_manager.conn.execute("SELECT DISTINCT pdf_name FROM documents")
+            bm25_names = set(row[0] for row in cur.fetchall())
+            orphaned = bm25_names - set(name.replace('pdf_', '') for name in chroma_names)
+            if orphaned:
+                print("\nCollections present only in BM25/FTS5 (hybrid_search.db):")
+                print("-" * 100)
+                for idx, pdf_name in enumerate(sorted(orphaned), 1):
+                    # Count docs/pages for this orphaned collection
+                    cur2 = fts5_manager.conn.execute("SELECT COUNT(*), MIN(page_number), MAX(page_number) FROM documents WHERE pdf_name = ?", (pdf_name,))
+                    row = cur2.fetchone()
+                    count, min_page, max_page = row if row else (0, None, None)
+                    page_info = f"{min_page}-{max_page}" if min_page is not None and max_page is not None else "Unknown"
+                    print(f"BM25-{idx:<3} {pdf_name:<25} {count:<10} {page_info:<15} {'(BM25 only)':<40}")
+                print("-" * 100)
+        finally:
+            fts5_manager.close()
     except Exception as e:
         logging.error(f"Error listing collections: {e}")
         sys.exit(1)
@@ -467,10 +469,35 @@ def remove_collection(client, collection_name: str):
         
         client.delete_collection(name=collection_name)
         print(f"Successfully deleted collection: {collection_name}")
-        
+        # --- FTS5/Hybrid DB cleanup ---
+        try:
+            # Try to get the PDF stem from the source file, fallback to collection_name
+            from pathlib import Path
+            if source_file and source_file != 'Unknown':
+                pdf_stem_name = Path(source_file).stem
+            else:
+                pdf_stem_name = collection_name.replace('pdf_', '')
+            fts5_manager = SQLiteFTS5Manager()
+            fts5_manager.clear_pdf_documents(pdf_stem_name, summary_only=False)
+            fts5_manager.close()
+            print(f"Successfully cleared FTS5 entries for: {pdf_stem_name}")
+        except Exception as fts_e:
+            logging.error(f"Error clearing FTS5 entries for {pdf_stem_name} during removal: {fts_e}")
+            print(f"Warning: Could not clear FTS5 entries for {pdf_stem_name}: {fts_e}")
+
     except Exception as e:
         logging.error(f"Error removing collection: {e}")
         sys.exit(1)
+
+def remove_bm25_collection(pdf_name: str):
+    """Remove a BM25/FTS5-only collection by pdf_name (as shown in --list BM25 section)"""
+    try:
+        fts5_manager = SQLiteFTS5Manager()
+        fts5_manager.clear_pdf_documents(pdf_name, summary_only=False)
+        fts5_manager.close()
+        print(f"Successfully removed BM25/FTS5 collection: {pdf_name}")
+    except Exception as e:
+        print(f"Error removing BM25/FTS5 collection {pdf_name}: {e}")
 
 def rename_collection(client, old_name: str, new_name: str):
     """Rename a PDF collection"""
@@ -563,6 +590,7 @@ def main():
     group.add_argument('--list', action='store_true', help='List all PDF collections')
     group.add_argument('--info', type=str, metavar='COLLECTION', help='Show detailed info for a collection (name or index #)')
     group.add_argument('--remove', type=str, metavar='COLLECTION', help='Remove a collection')
+    group.add_argument('--remove-bm25', type=str, metavar='PDF_NAME', help='Remove a BM25/FTS5-only collection by pdf_name')
     group.add_argument('--rename', nargs=2, metavar=('OLD_NAME', 'NEW_NAME'), help='Rename a collection')
     group.add_argument('--verify', type=str, metavar='COLLECTION', help='Verify collection integrity')
     
@@ -601,6 +629,8 @@ def main():
             get_collection_info(client, args.info, args.page)
         elif args.remove:
             remove_collection(client, args.remove)
+        elif args.remove_bm25:
+            remove_bm25_collection(args.remove_bm25)
         elif args.rename:
             rename_collection(client, args.rename[0], args.rename[1])
         elif args.verify:

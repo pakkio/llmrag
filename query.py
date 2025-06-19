@@ -8,7 +8,7 @@ from typing import List, Dict, Tuple, Optional
 import numpy as np
 import re
 import chromadb
-from llm_wrapper import llm_call, generate_embeddings, test_openai_embeddings, check_openai_api
+from llm_wrapper import llm_call, generate_embeddings, test_openai_embeddings, check_openai_api, llm_call_structured_query_enhancement
 from sqlite_fts5 import SQLiteFTS5Manager
 from llm_reranker import llm_rerank_results
 
@@ -631,7 +631,7 @@ def hybrid_search(query: str, top_k: int = 10, pdf_name: str = None,
                         except:
                             enhancement_data = {'detected_language': 'unknown', 'synonyms': [], 'related_terms': []}
                     
-                    confidence = calculate_confidence_score(query, enhancement_data, reranked_results)
+                    confidence = calculate_confidence_score(query, enhancement_data, reranked_results, reranked=True)
                     return reranked_results[:top_k], confidence
                 except Exception as e:
                     logging.warning(f"Confidence calculation failed: {e}")
@@ -649,7 +649,7 @@ def hybrid_search(query: str, top_k: int = 10, pdf_name: str = None,
                 except:
                     enhancement_data = {'detected_language': 'unknown', 'synonyms': [], 'related_terms': []}
             
-            confidence = calculate_confidence_score(query, enhancement_data, results_for_processing)
+            confidence = calculate_confidence_score(query, enhancement_data, results_for_processing, reranked=False)
             return results_for_processing[:top_k], confidence
         except Exception as e:
             logging.warning(f"Confidence calculation failed: {e}")
@@ -731,7 +731,7 @@ def classify_query_type(query: str) -> str:
     
     return "default"
 
-def calculate_confidence_score(query: str, enhancement_data: dict, search_results: List[Tuple[str, int, str, float]]) -> float:
+def calculate_confidence_score(query: str, enhancement_data: dict, search_results: List[Tuple[str, int, str, float]], reranked: bool = False) -> float:
     """
     Calculate confidence score based on query enhancement and result quality.
     
@@ -739,6 +739,7 @@ def calculate_confidence_score(query: str, enhancement_data: dict, search_result
         query: Original query
         enhancement_data: Enhancement results from enhance_query_adaptive
         search_results: Search results with scores
+        reranked: Whether results have been LLM reranked (affects score interpretation)
     
     Returns:
         Confidence score between 0.0 and 1.0
@@ -766,36 +767,56 @@ def calculate_confidence_score(query: str, enhancement_data: dict, search_result
         enhancement_confidence = 1.0  # Rich enhancement
     confidence_factors.append(('enhancement', enhancement_confidence))
     
+    # Debug logging for enhancement
+    logging.debug(f"Enhancement analysis: synonyms={len(synonyms)}, related_terms={len(related_terms)}, total={total_terms}, confidence={enhancement_confidence}")
+    
     # Factor 3: Result score quality (0.2-1.0)
     if not search_results:
         result_confidence = 0.2
     else:
-        top_scores = [score for _, _, _, score in search_results[:5]]
+        top_scores = [score for _, _, _, score in search_results[:3]]
         avg_top_score = sum(top_scores) / len(top_scores)
         
-        # Check for weak semantic connections by analyzing score distribution
-        if len(top_scores) > 1:
-            score_std = np.std(top_scores)
-            if score_std < 0.1 and avg_top_score < 0.7:
-                # Low scores with little variation = weak matching
-                result_confidence = 0.3
-            elif avg_top_score >= 0.9:
-                result_confidence = 1.0  # Excellent matches
-            elif avg_top_score >= 0.7:
-                result_confidence = 0.85  # Good matches
-            elif avg_top_score >= 0.5:
-                result_confidence = 0.65  # Moderate matches
-            elif avg_top_score >= 0.3:
-                result_confidence = 0.45  # Weak matches
+        # Adjust confidence calculation for reranked results
+        if reranked:
+            # For reranked results, scores are different (typically much lower)
+            # We focus more on the fact that LLM reranking happened and less on raw scores
+            if len(search_results) >= 5:
+                result_confidence = 0.75  # Good - LLM found good results to rerank
+            elif len(search_results) >= 3:
+                result_confidence = 0.65  # Moderate - Some results to rerank
             else:
-                result_confidence = 0.25  # Very weak matches
+                result_confidence = 0.55  # Lower - Few results
+            logging.info(f"Reranked results: {len(search_results)} candidates → confidence {result_confidence}")
         else:
-            if avg_top_score >= 0.8:
-                result_confidence = 0.9
-            elif avg_top_score >= 0.5:
-                result_confidence = 0.7
+            # Original semantic score analysis for non-reranked results
+            if len(top_scores) > 1:
+                score_std = np.std(top_scores)
+                
+                # Debug logging
+                logging.info(f"Results analysis: top_scores={top_scores[:3]}, avg={avg_top_score:.3f}, std={score_std:.3f}")
+                
+                if score_std < 0.05 and avg_top_score < 0.4:
+                    # Very low scores with little variation = weak matching
+                    result_confidence = 0.3
+                    logging.info(f"Applied weak matching penalty: std={score_std:.3f} < 0.05 and avg={avg_top_score:.3f} < 0.4")
+                elif avg_top_score >= 0.9:
+                    result_confidence = 1.0  # Excellent matches
+                elif avg_top_score >= 0.7:
+                    result_confidence = 0.85  # Good matches
+                elif avg_top_score >= 0.5:
+                    result_confidence = 0.65  # Moderate matches
+                elif avg_top_score >= 0.3:
+                    result_confidence = 0.45  # Weak matches
+                else:
+                    result_confidence = 0.25  # Very weak matches
             else:
-                result_confidence = 0.4
+                if avg_top_score >= 0.8:
+                    result_confidence = 0.9
+                elif avg_top_score >= 0.5:
+                    result_confidence = 0.7
+                else:
+                    result_confidence = 0.4
     confidence_factors.append(('results', result_confidence))
     
     # Factor 4: Result count (0.6-1.0)
@@ -817,9 +838,8 @@ def calculate_confidence_score(query: str, enhancement_data: dict, search_result
     total_confidence = sum(weights[factor] * score for factor, score in confidence_factors)
     
     # Log confidence breakdown for debugging
-    if logging.getLogger().isEnabledFor(logging.DEBUG):
-        factor_details = ', '.join([f"{factor}: {score:.2f}" for factor, score in confidence_factors])
-        logging.debug(f"Confidence breakdown: {factor_details} → {total_confidence:.2f}")
+    factor_details = ', '.join([f"{factor}: {score:.2f}" for factor, score in confidence_factors])
+    logging.info(f"Confidence calculation for query '{query}': {factor_details} → Final: {total_confidence:.2f}")
     
     return round(total_confidence, 2)
 
@@ -889,7 +909,7 @@ def enhance_query_adaptive(original_query: str, enhancement_mode: str = "full") 
 
 def enhance_query(original_query: str, enhancement_instruction: str = None) -> dict:
     """
-    Enhance and translate query using LLM for better search performance.
+    Enhance and translate query using LLM with structured output for better search performance.
     
     Args:
         original_query: The original search query
@@ -897,6 +917,27 @@ def enhance_query(original_query: str, enhancement_instruction: str = None) -> d
     
     Returns:
         dict with enhanced_query, translations, synonyms, and related_terms
+    """
+    
+    try:
+        # Try structured output first
+        enhancement_data, success = llm_call_structured_query_enhancement(original_query, enhancement_instruction)
+        
+        if success and enhancement_data:
+            logging.info(f"Structured query enhancement successful for '{original_query}'. Strategy: {enhancement_data.get('search_strategy', 'N/A')}")
+            return enhancement_data
+        else:
+            logging.warning(f"Structured query enhancement failed for '{original_query}', falling back to original method")
+            
+    except Exception as e:
+        logging.warning(f"Structured query enhancement error for '{original_query}': {e}, falling back to original method")
+    
+    # Fallback to original method if structured fails
+    return enhance_query_fallback(original_query, enhancement_instruction)
+
+def enhance_query_fallback(original_query: str, enhancement_instruction: str = None) -> dict:
+    """
+    Fallback enhance query method using traditional JSON parsing.
     """
     
     # Default enhancement instruction if none provided
@@ -955,8 +996,10 @@ Focus on terms that would likely appear in academic, technical, or reference doc
                 response = response[:-3]
             
             enhancement_data = json.loads(response.strip())
+            logging.info(f"Fallback query enhancement successful for '{original_query}'. Strategy: {enhancement_data.get('search_strategy', 'N/A')}")
             return enhancement_data
         else:
+            logging.warning(f"Fallback LLM call failed for '{original_query}'")
             # Fallback: basic structure
             return {
                 "original_query": original_query,
@@ -968,7 +1011,7 @@ Focus on terms that would likely appear in academic, technical, or reference doc
                 "search_strategy": "fallback - no enhancement applied"
             }
     except Exception as e:
-        logging.warning(f"Query enhancement failed: {e}")
+        logging.warning(f"Fallback query enhancement failed: {e}")
         # Fallback: return original query
         return {
             "original_query": original_query,
@@ -1637,7 +1680,7 @@ def main():
                 enhancement_data = {}
                 if enhancement_mode != "off":
                     enhancement_data = enhance_query_adaptive(args.query, enhancement_mode)
-                confidence_score = calculate_confidence_score(args.query, enhancement_data, similarities)
+                confidence_score = calculate_confidence_score(args.query, enhancement_data, similarities, reranked=False)
             except Exception as e:
                 logging.warning(f"Confidence calculation failed: {e}")
                 confidence_score = 0.7
@@ -1660,7 +1703,7 @@ def main():
             # Calculate confidence for semantic results  
             try:
                 enhancement_data = {'detected_language': 'english', 'synonyms': [], 'related_terms': []}
-                confidence_score = calculate_confidence_score(args.query, enhancement_data, similarities)
+                confidence_score = calculate_confidence_score(args.query, enhancement_data, similarities, reranked=False)
             except Exception as e:
                 logging.warning(f"Confidence calculation failed: {e}")
                 confidence_score = 0.75

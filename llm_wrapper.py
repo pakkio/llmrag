@@ -33,7 +33,8 @@ except ImportError:
 def llm_call(messages: List[Dict[str, str]],
             model: Optional[str] = None,
             max_tokens: int = 4000,
-            temperature: float = 0.1) -> Tuple[str, bool]:
+            temperature: float = 0.1,
+            response_format: Optional[Dict] = None) -> Tuple[str, bool]:
     """
     Simplified LLM wrapper for semantic compression.
     Returns (response_text, success_flag)
@@ -60,6 +61,10 @@ def llm_call(messages: List[Dict[str, str]],
         "temperature": temperature,
         "stream": False
     }
+    
+    # Add response_format if provided (for structured outputs)
+    if response_format:
+        payload["response_format"] = response_format
 
     try:
         response = requests.post(
@@ -193,6 +198,100 @@ def check_openai_api() -> bool:
     
     # Test if embedding generation works
     return test_openai_embeddings()
+
+def llm_call_structured_query_enhancement(original_query: str, enhancement_instruction: str = None) -> Tuple[Dict, bool]:
+    """
+    Enhanced query processing with structured JSON output using OpenRouter's JSON Schema support.
+    Returns (enhancement_dict, success_flag)
+    """
+    if enhancement_instruction is None:
+        enhancement_instruction = """Focus on BALANCED enhancement:
+- Translate to English if needed
+- Add relevant synonyms and related terms
+- Include conceptually related vocabulary
+- Maintain focus while expanding search potential"""
+
+    # JSON Schema for structured output
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "query_enhancement",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "original_query": {"type": "string"},
+                    "detected_language": {"type": "string"},
+                    "translation": {"type": "string"},
+                    "enhanced_query": {"type": "string"},
+                    "synonyms": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    },
+                    "related_terms": {
+                        "type": "array", 
+                        "items": {"type": "string"}
+                    },
+                    "search_strategy": {"type": "string"}
+                },
+                "required": ["original_query", "detected_language", "translation", "enhanced_query", "synonyms", "related_terms", "search_strategy"],
+                "additionalProperties": False
+            }
+        }
+    }
+
+    messages = [
+        {
+            "role": "user",
+            "content": f"""You are a search query enhancement expert. Your task is to improve this search query for better document retrieval.
+
+Original Query: "{original_query}"
+
+Enhancement Level Instructions:
+{enhancement_instruction}
+
+CRITICAL: You MUST respond with valid JSON in the exact schema format. Do not use numbered lists, markdown, or any other format.
+
+Your JSON response must contain these exact fields:
+- original_query: the original query exactly as provided
+- detected_language: name of detected language (e.g. "italian", "english", "spanish")
+- translation: English translation if needed, or original query if already English
+- enhanced_query: improved searchable version with appropriate expansion
+- synonyms: array of alternative terms (adjust quantity based on enhancement level)
+- related_terms: array of conceptually related terms (adjust scope based on enhancement level)
+- search_strategy: brief explanation of enhancement approach
+
+Examples by enhancement level:
+MINIMAL: "Quanto è grande il Sole?" → "How big Sun? size"
+FULL: "Cos'è una supernova?" → "What supernova? stellar explosion massive star core collapse" 
+MAXIMUM: "Differenza tra pianeta e stella" → "Difference planet star? celestial bodies stellar objects planetary formation stellar evolution mass composition"
+
+Focus on terms that would likely appear in academic, technical, or reference documents.
+
+Respond ONLY with valid JSON, no markdown, no explanations."""
+        }
+    ]
+
+    try:
+        logging.debug(f"Calling LLM for structured query enhancement. Original query: '{original_query}'")
+        response, success = llm_call(messages, max_tokens=500, response_format=response_format)
+        
+        if success:
+            try:
+                enhancement_data = json.loads(response)
+                logging.info(f"Structured query enhancement successful for '{original_query}'. Strategy: {enhancement_data.get('search_strategy', 'N/A')}")
+                return enhancement_data, True
+            except json.JSONDecodeError as json_e:
+                logging.error(f"JSONDecodeError in structured output for '{original_query}': {json_e}")
+                logging.error(f"Problematic response: ```{response}```")
+                return {}, False
+        else:
+            logging.warning(f"LLM call failed for structured query enhancement: '{original_query}'")
+            return {}, False
+
+    except Exception as e:
+        logging.error(f"Unexpected error during structured query enhancement for '{original_query}': {e}", exc_info=True)
+        return {}, False
 
 if __name__ == "__main__":
     print("Testing LLM connection...")
